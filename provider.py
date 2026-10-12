@@ -4,27 +4,18 @@ from datetime import date,timedelta
 def many(x): return [] if x is None else x if isinstance(x,list) else [x]
 class Data:
     def __init__(self):
-        self.token=os.getenv('TRADIER_TOKEN','');self.finn=os.getenv('FINNHUB_TOKEN','')
-    def tradier(self,path,**params):
-        time.sleep(.55)
-        r=requests.get('https://api.tradier.com/v1/'+path,params=params,headers={'Authorization':'Bearer '+self.token,'Accept':'application/json'},timeout=25)
-        r.raise_for_status();return r.json()
+        from schwab import Schwab
+        self.schwab=Schwab();self.finn=os.getenv('FINNHUB_TOKEN','')
+    @property
+    def token(self):return self.schwab.connected()
     def fh(self,path,**params):
         time.sleep(1.1)
         r=requests.get('https://finnhub.io/api/v1/'+path,params={**params,'token':self.finn},timeout=25)
         r.raise_for_status();return r.json()
-    def clock(self): return self.tradier('markets/clock')['clock']
-    def quotes(self,symbols): return many(self.tradier('markets/quotes',symbols=','.join(symbols)).get('quotes',{}).get('quote'))
-    def days(self,symbol,today):
-        raw=self.tradier('markets/history',symbol=symbol,start=str(today-timedelta(days=550)),end=str(today-timedelta(days=1)),interval='daily')
-        return many((raw.get('history') or {}).get('day'))
-    def options(self,symbol,today,cfg):
-        raw=self.tradier('markets/options/expirations',symbol=symbol)
-        exps=many((raw.get('expirations') or {}).get('date'))
-        for exp in exps:
-            if cfg['put_dte_min']<=(date.fromisoformat(exp)-today).days<=cfg['put_dte_max']:
-                raw=self.tradier('markets/options/chains',symbol=symbol,expiration=exp,greeks='true')
-                yield from many((raw.get('options') or {}).get('option'))
+    def clock(self):return self.schwab.clock()
+    def quotes(self,symbols):return self.schwab.quotes(symbols)
+    def days(self,symbol,today):return self.schwab.days(symbol,today)
+    def options(self,symbol,today,cfg):return self.schwab.options(symbol,today,cfg)
     def research(self,symbol,today,horizon):
         earnings=self.fh('calendar/earnings',symbol=symbol,**{'from':str(today),'to':str(today+timedelta(days=horizon))})
         if 'earningsCalendar' not in earnings: raise ValueError('Earnings coverage unavailable')
@@ -38,10 +29,10 @@ class Data:
         from datetime import datetime
         from zoneinfo import ZoneInfo
         now=datetime.now(ZoneInfo('America/New_York'))
-        raw=self.tradier('markets/timesales',symbol='JD',interval='15min',start=str(today-timedelta(days=30))+' 09:30',end=now.strftime('%Y-%m-%d %H:%M'),session_filter='open')
+        raw=self.schwab.intraday(today)
         groups={}
-        for b in many((raw.get('series') or {}).get('data')):
-            t=datetime.fromisoformat(b['time']).replace(tzinfo=ZoneInfo('America/New_York'))
+        for b in sorted(raw,key=lambda x:x['datetime']):
+            t=datetime.fromtimestamp(b['datetime']/1000,ZoneInfo('America/New_York'))
             minutes=t.hour*60+t.minute-570
             if not 0<=minutes<360 or (now-t).total_seconds()<900: continue
             groups.setdefault((t.date(),minutes//60),[]).append(b)

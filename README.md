@@ -1,3 +1,7 @@
+# Stockdesk — Schwab market data + IBKR portfolio
+
+Start with **SCHWAB_SETUP.md** for current deployment instructions. This release replaces Tradier; do not configure TRADIER_TOKEN. Finnhub research data is still required.
+
 # Stockdesk — hosted research and screening agent
 
 Status: deployable application, not deployed from this workspace. Live provider integration requires your credentials and entitlements. No simulated stock selections are displayed. The app has no order-placement routes.
@@ -5,7 +9,7 @@ Status: deployable application, not deployed from this workspace. Live provider 
 ## Deploy online (Render)
 1. Put the contents of this folder in a private GitHub repository.
 2. In Render, choose New → Blueprint and connect that repository. Render reads render.yaml. Review the current hosting charge before provisioning; an always-on paid service with a persistent disk is required. Use one instance only.
-3. Set TRADIER_TOKEN to your production Tradier market-data token and FINNHUB_TOKEN to a Finnhub key with U.S. earnings calendar, company news and basic financial metrics access. Do not use delayed sandbox data. Confirm your data agreements allow this private personal-use dashboard; redistribution requires separate rights.
+3. Set SCHWAB_APP_KEY, SCHWAB_APP_SECRET, SCHWAB_CALLBACK_URL to your production Schwab market-data token and FINNHUB_TOKEN to a Finnhub key with U.S. earnings calendar, company news and basic financial metrics access. Do not use delayed sandbox data. Confirm your data agreements allow this private personal-use dashboard; redistribution requires separate rights.
 4. Set ALERT_WEBHOOK_URL to a Slack incoming webhook if desired (the payload uses a `text` field). If unused, leave blank. Credentials belong only in Render environment variables, never browser code or Git.
 5. Open Render's assigned HTTPS URL. Sign in as `admin` using the generated DASHBOARD_PASSWORD from the environment settings. The health endpoint intentionally exposes no account information.
 6. Review criteria, click Run screen during regular U.S. hours, and inspect Agent activity. Verify actual market prices and option contracts against your broker before enabling notifications. Notifications default OFF; enable in Screen criteria after verification.
@@ -29,7 +33,7 @@ Single Python web process with an hourly monitoring thread and persistent SQLite
 Reports include sourced financial metrics, trade levels, put contract economics, trend watch zones and headlines. These are deterministic research summaries, not independent AI analyst agents. They do not produce a DCF/fair-value verdict, personalized staged allocations, or a verified interpretation of catalysts. Missing metrics appear as unavailable. Fundamental data is dated by retrieval, not necessarily its fiscal reporting period.
 
 ## Validation and remaining activation work
-Local tests cover screening rejection, valid option economics, credential-free setup, saving settings, browser rendering, and production password blocking. Live Tradier/Finnhub coverage, deployment, holiday scheduling against live clock, and external webhook delivery cannot be verified without connected accounts. Check these before treating the app as operational. No market data API keys or hosting credentials were available when this package was built.
+Local tests cover screening rejection, valid option economics, credential-free setup, saving settings, browser rendering, and production password blocking. Live Schwab/Finnhub coverage, deployment, holiday scheduling against live clock, and external webhook delivery cannot be verified without connected accounts. Check these before treating the app as operational. No market data API keys or hosting credentials were available when this package was built.
 
 Provider and deployment references:
 https://docs.tradier.com/docs/market-data

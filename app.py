@@ -1,9 +1,11 @@
-import os,json,time,threading,hashlib,hmac,base64,sqlite3
+import os,json,time,threading,hashlib,hmac,base64,sqlite3,secrets
 from pathlib import Path
 from datetime import datetime,timezone,timedelta
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse,parse_qs
+from http.cookies import SimpleCookie
+from schwab import Schwab
 import requests
 from provider import Data
 from broker import validate_snapshot,portfolio_status
@@ -29,7 +31,9 @@ def config():
 def stamp():return datetime.now(timezone.utc).isoformat()
 def status():
     state=get('state',{'status':'Setup required','rows':[],'errors':[]})
-    state['configured']=bool(os.getenv('TRADIER_TOKEN') and os.getenv('FINNHUB_TOKEN'))
+    state['configured']=bool(Schwab().connected() and os.getenv('FINNHUB_TOKEN'))
+    state['market_data_source']='Charles Schwab'
+    state['schwab']={'configured':Schwab().configured(),'connected':Schwab().connected()}
     state['notification_configured']=bool(os.getenv('ALERT_WEBHOOK_URL'))
     state['morning_digest']=get('morning_digest');state['config']=config();state['alerts']=get('alerts',[])[-30:]
     state['stale']=not state.get('completed_at') or (datetime.now(timezone.utc)-datetime.fromisoformat(state['completed_at'])).total_seconds()>4200
@@ -40,7 +44,7 @@ def scan(morning=False):
     try:
         cfg=config();data=Data()
         if not data.token or not data.finn:
-            save('state',{'status':'Setup required · market data keys missing','rows':[],'errors':[]});return
+            save('state',{'status':'Setup required · connect Schwab and configure Finnhub','rows':[],'errors':[]});return
         if data.clock()['state']!='open':
             s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);return
         today=datetime.now(ZoneInfo('America/New_York')).date()
@@ -111,7 +115,7 @@ def cfg_morning_due(now,cfg,done):
 def agent():
     # Exchange clock handles U.S. holidays, weekends, and early closes.
     while True:
-        if os.getenv('TRADIER_TOKEN') and os.getenv('FINNHUB_TOKEN'):
+        if Schwab().connected() and os.getenv('FINNHUB_TOKEN'):
             try:
                 now=datetime.now(ZoneInfo('America/New_York'))
                 slot=str(now.date())+':'+str((now.hour*60+now.minute-570)//60)
@@ -138,6 +142,37 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if urlparse(self.path).path=='/health':self.respond({'ok':True});return
         if not self.auth():return
+        path=urlparse(self.path).path
+        if path=='/auth/schwab/start':
+            try:
+                state=secrets.token_urlsafe(32)
+                url=Schwab().authorize_url(state)
+                save('oauth:'+hashlib.sha256(state.encode()).hexdigest(),time.time()+600)
+                self.send_response(302);self.send_header('Location',url)
+                self.send_header('Set-Cookie','schwab_state='+state+'; Secure; HttpOnly; SameSite=Lax; Path=/auth/schwab; Max-Age=600')
+                self.send_header('Cache-Control','no-store');self.end_headers()
+            except Exception:self.respond({'error':'Configure Schwab credentials and HTTPS callback in Render first'},400)
+            return
+        if path=='/auth/schwab/callback':
+            try:
+                query=parse_qs(urlparse(self.path).query)
+                state=query.get('state',[''])[0]
+                cookies=SimpleCookie();cookies.load(self.headers.get('Cookie',''))
+                cookie=cookies.get('schwab_state')
+                if not state or not cookie or not hmac.compare_digest(state,cookie.value):raise ValueError()
+                key='oauth:'+hashlib.sha256(state.encode()).hexdigest()
+                # Atomically consume state to prevent concurrent replay.
+                with conn() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    row=c.execute('select v from kv where k=?',(key,)).fetchone()
+                    c.execute('delete from kv where k=?',(key,))
+                if not row or json.loads(row[0])<time.time():raise ValueError()
+                Schwab().finish(query['code'][0])
+                self.send_response(302);self.send_header('Location','/')
+                self.send_header('Set-Cookie','schwab_state=; Secure; HttpOnly; SameSite=Lax; Path=/auth/schwab; Max-Age=0')
+                self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer');self.end_headers()
+            except Exception:self.respond({'error':'Schwab authorization failed or expired. Start Connect Schwab again.'},400)
+            return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
         if self.path!='/':self.send_error(404);return

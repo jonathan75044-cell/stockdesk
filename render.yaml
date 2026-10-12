@@ -17,7 +17,11 @@ services:
         value: /var/data
       - key: DASHBOARD_PASSWORD
         generateValue: true
-      - key: TRADIER_TOKEN
+      - key: SCHWAB_APP_KEY
+        sync: false
+      - key: SCHWAB_APP_SECRET
+        sync: false
+      - key: SCHWAB_CALLBACK_URL
         sync: false
       - key: FINNHUB_TOKEN
         sync: false
