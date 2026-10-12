@@ -1,0 +1,185 @@
+import os,json,time,threading,hashlib,hmac,base64,sqlite3
+from pathlib import Path
+from datetime import datetime,timezone,timedelta
+from zoneinfo import ZoneInfo
+from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
+from urllib.parse import urlparse
+import requests
+from provider import Data
+from broker import validate_snapshot,portfolio_status
+from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone
+ROOT=Path(__file__).parent
+STORE=Path(os.getenv('DATA_DIR',str(ROOT/'data')));STORE.mkdir(exist_ok=True,parents=True)
+DB=STORE/'state.db'
+lock=threading.Lock()
+def conn():
+    c=sqlite3.connect(DB);c.execute('create table if not exists kv (k text primary key,v text)');return c
+def get(k,default=None):
+    with conn() as c:r=c.execute('select v from kv where k=?',(k,)).fetchone()
+    return json.loads(r[0]) if r else default
+def save(k,v):
+    with conn() as c:c.execute('insert or replace into kv values (?,?)',(k,json.dumps(v)))
+def config():
+    defaults=json.loads((ROOT/'config.json').read_text())
+    saved=get('config',{})
+    if get('rules_version')!=2:
+        saved.update({k:defaults[k] for k in ('put_delta_min','put_delta_max','put_max_spread_fraction')})
+        save('config',saved);save('rules_version',2)
+    return {**defaults,**saved}
+def stamp():return datetime.now(timezone.utc).isoformat()
+def status():
+    state=get('state',{'status':'Setup required','rows':[],'errors':[]})
+    state['configured']=bool(os.getenv('TRADIER_TOKEN') and os.getenv('FINNHUB_TOKEN'))
+    state['notification_configured']=bool(os.getenv('ALERT_WEBHOOK_URL'))
+    state['morning_digest']=get('morning_digest');state['config']=config();state['alerts']=get('alerts',[])[-30:]
+    state['stale']=not state.get('completed_at') or (datetime.now(timezone.utc)-datetime.fromisoformat(state['completed_at'])).total_seconds()>4200
+    return state
+
+def scan(morning=False):
+    if not lock.acquire(False):return
+    try:
+        cfg=config();data=Data()
+        if not data.token or not data.finn:
+            save('state',{'status':'Setup required · market data keys missing','rows':[],'errors':[]});return
+        if data.clock()['state']!='open':
+            s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);return
+        today=datetime.now(ZoneInfo('America/New_York')).date()
+        symbols=list(dict.fromkeys(cfg['universe'].split()))
+        state={'status':'Scanning','started_at':stamp(),'rows':[],'errors':[],'scanned':0,'total':len(symbols)};save('state',state)
+        for symbol in symbols:
+            try:
+                q=data.quotes([symbol])[0]
+                ts=float(q['trade_date'])/1000
+                if abs(time.time()-ts)>900:raise ValueError('Stale underlying quote')
+                price=float(q['last']);days=data.days(symbol,today);m=indicators(days)
+                if not days or (today-datetime.fromisoformat(days[-1]['date']).date()).days>5: raise ValueError('Daily history stale')
+                if price<cfg['min_price'] or m['avgvol']<cfg['min_avg_volume']:continue
+                zone=demand_zone(price,days,cfg)
+                if not zone:continue
+                research=data.research(symbol,today,cfg['put_dte_max']+cfg['earnings_buffer_days'])
+                quality=fundamental_gate(research,cfg,today)
+                if not quality:continue
+                sw=swing(price,days,cfg)
+                if symbol=='JD' and sw and not data.jd_hold(today):sw=None
+                puts=[]
+                if price>m['ma20']>m['ma50']:
+                    for opt in data.options(symbol,today,cfg):
+                        candidate=put_candidate(price,opt,cfg,today)
+                        if candidate:puts.append(candidate)
+                if not(sw or puts):continue
+                dates=[datetime.fromisoformat(e['date']).date() for e in research['earnings'] if e.get('date')]
+                if any(d<=today+timedelta(days=14+cfg['earnings_buffer_days']) for d in dates):sw=None
+                puts=[c for c in puts if not any(d<=datetime.fromisoformat(c['expiry']).date()+timedelta(days=cfg['earnings_buffer_days']) for d in dates)]
+                if not(sw or puts):continue
+                best=max(puts,key=lambda c:c['score']) if puts else None
+                row={'quality':quality,'demand_zone':zone,'symbol':symbol,'name':q.get('description',symbol),'price':price,'volume':q.get('volume'),'quote_at':datetime.fromtimestamp(ts,timezone.utc).isoformat(),'swing':sw,'put':best,'score':max(sw['score'] if sw else 0,best['score'] if best else 0),'research':research,'ma20':m['ma20'],'ma50':m['ma50'],'asof':stamp(),'earnings_note':'No scheduled event returned in the screened horizon; calendar may change.'}
+                state['rows'].append(row)
+            except Exception as e:
+                # Do not expose URLs containing API keys.
+                state['errors'].append({'symbol':symbol,'reason':str(e) if isinstance(e,ValueError) else type(e).__name__+' · data unavailable'})
+            finally:
+                state['scanned']+=1;save('state',state)
+        state['rows']=[r for r in state['rows'] if time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900 and (not r['put'] or time.time()-r['put']['quote_timestamp']<=900)]
+        state['rows']=sorted(state['rows'],key=lambda x:x['score'],reverse=True)[:cfg['max_results']]
+        state['status']='Monitoring';state['completed_at']=stamp();save('state',state)
+        if morning:
+            digest={'date':str(today),'completed_at':stamp(),'rows':state['rows'],'errors':state['errors'],'note':'Qualified at scan time; recheck live quotes before acting.'}
+            save('morning_digest',digest);save('morning_done',str(today))
+        if cfg['notifications_enabled'] and os.getenv('ALERT_WEBHOOK_URL') and data.clock()['state']=='open':
+            if morning and state['rows'] and get('morning_sent')!=str(today):
+                try:
+                    brief=[{'symbol':r['symbol'],'price':r['price'],'put':r['put'],'swing':r['swing'],'demand_zone':r['demand_zone']} for r in state['rows']]
+                    response=requests.post(os.environ['ALERT_WEBHOOK_URL'],json={'text':json.dumps({'message':'Morning qualifying setups','date':str(today),'setups':brief})},timeout=15);response.raise_for_status();save('morning_sent',str(today))
+                except requests.RequestException:
+                    state['errors'].append({'reason':'Morning digest delivery failed'});save('state',state);save('morning_done',None)
+            for row in ([] if morning else state['rows']):
+                if (datetime.now(timezone.utc)-datetime.fromisoformat(row['quote_at'])).total_seconds()>900:continue
+                kinds=','.join(k for k in ('swing','put') if row[k]);key=str(today)+':'+row['symbol']+':'+kinds
+                if get('sent:'+key):continue
+                payload={'text':json.dumps({'message':'Qualified screen · review before trading','stock':row,'sources':['Tradier market data','Finnhub research'],'risks':'Earnings schedules can change; price gaps, assignment, concentration and liquidity risk.'},indent=2)}
+                try:
+                    response=requests.post(os.environ['ALERT_WEBHOOK_URL'],json=payload,timeout=15);response.raise_for_status()
+                    save('sent:'+key,True);alerts=get('alerts',[]);alerts.append({'at':stamp(),'symbol':row['symbol'],'type':kinds});save('alerts',alerts[-200:])
+                except requests.RequestException:state['errors'].append({'symbol':row['symbol'],'reason':'Notification delivery failed'});save('state',state)
+    except Exception as e:
+        s=get('state',{'rows':[]});s['status']='Data connection error';s['errors']=[{'reason':type(e).__name__}];save('state',s)
+    finally:lock.release()
+
+def cfg_morning_due(now,cfg,done):
+    return cfg['morning_scan_minute']<=now.hour*60+now.minute<720 and done!=str(now.date())
+
+def agent():
+    # Exchange clock handles U.S. holidays, weekends, and early closes.
+    while True:
+        if os.getenv('TRADIER_TOKEN') and os.getenv('FINNHUB_TOKEN'):
+            try:
+                now=datetime.now(ZoneInfo('America/New_York'))
+                slot=str(now.date())+':'+str((now.hour*60+now.minute-570)//60)
+                minute=now.hour*60+now.minute
+                morning=cfg_morning_due(now,config(),get('morning_done'))
+                if Data().clock()['state']=='open' and (morning or get('last_slot')!=slot):
+                    save('last_slot',slot);scan(morning=morning)
+            except Exception:pass
+        time.sleep(60)
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self,*a):pass
+    def auth(self):
+        password=os.getenv('DASHBOARD_PASSWORD','')
+        if not password and os.getenv('APP_ENV')=='production':
+            self.send_error(503,'Configure DASHBOARD_PASSWORD');return False
+        if not password:return True
+        expected='Basic '+base64.b64encode(('admin:'+password).encode()).decode()
+        if not hmac.compare_digest(self.headers.get('Authorization',''),expected):
+            self.send_response(401);self.send_header('WWW-Authenticate','Basic realm="Stockdesk"');self.end_headers();return False
+        return True
+    def respond(self,value,code=200):
+        raw=json.dumps(value).encode();self.send_response(code);self.send_header('Content-Type','application/json');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
+    def do_GET(self):
+        if urlparse(self.path).path=='/health':self.respond({'ok':True});return
+        if not self.auth():return
+        if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
+        if self.path=='/api/state':self.respond(status());return
+        if self.path!='/':self.send_error(404);return
+        raw=(ROOT/'index.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
+    def do_POST(self):
+        if self.path=='/api/broker/snapshot':
+            token=os.getenv('BROKER_SYNC_TOKEN','')
+            if len(token)<32 or not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token):
+                self.respond({'error':'Unauthorized'},401);return
+            try:
+                n=int(self.headers.get('Content-Length','0'))
+                if not 0<n<=2000000:raise ValueError()
+                data=validate_snapshot(json.loads(self.rfile.read(n)))
+                save('ibkr_portfolio',data);self.respond({'ok':True})
+            except Exception:self.respond({'error':'Invalid portfolio snapshot'},400)
+            return
+        if not self.auth():return
+        if self.headers.get('X-Stockdesk')!='1':self.respond({'error':'Request rejected'},403);return
+        if self.path=='/api/scan':threading.Thread(target=scan,daemon=True).start();self.respond({'queued':True});return
+        if self.path=='/api/config':
+            try:
+                n=int(self.headers.get('Content-Length','0'))
+                if not 0<n<16000:raise ValueError()
+                data=json.loads(self.rfile.read(n));base=json.loads((ROOT/'config.json').read_text())
+                if set(data)!=set(base):raise ValueError()
+                import re
+                if not isinstance(data['universe'],str) or not 1<=len(data['universe'].split())<=500 or any(not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',s) for s in data['universe'].split()):raise ValueError()
+                for k,v in base.items():
+                    if isinstance(v,bool):
+                        if not isinstance(data[k],bool):raise ValueError()
+                    elif isinstance(v,(int,float)):
+                        if isinstance(data[k],bool) or not isinstance(data[k],(int,float)) or not 0<float(data[k])<1000000000:raise ValueError()
+                if not 1<=data['max_results']<=50 or int(data['max_results'])!=data['max_results']:raise ValueError()
+                data['max_results']=int(data['max_results'])
+                if not 0<data['put_delta_min']<=data['put_delta_max']<1 or data['put_dte_min']>data['put_dte_max']:raise ValueError()
+                if data['swing_min_rr']<2:raise ValueError()
+                if not 0<data['put_otm_min']<=data['put_otm_max']<1:raise ValueError()
+                if not 570<=data['morning_scan_minute']<720 or int(data['morning_scan_minute'])!=data['morning_scan_minute']:raise ValueError()
+                save('config',data);self.respond({'ok':True})
+            except Exception:self.respond({'error':'Invalid settings. Use positive numbers, delta below 1, R/R ≥2, and a result limit of 1–50.'},400)
+            return
+        self.send_error(404)
+if __name__=='__main__':
+    threading.Thread(target=agent,daemon=True).start()
+    ThreadingHTTPServer(('0.0.0.0',int(os.getenv('PORT','8000'))),Handler).serve_forever()

@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: stockdesk-agent
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /health
+    disk:
+      name: stockdesk-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: DASHBOARD_PASSWORD
+        generateValue: true
+      - key: TRADIER_TOKEN
+        sync: false
+      - key: FINNHUB_TOKEN
+        sync: false
+      - key: ALERT_WEBHOOK_URL
+        sync: false
+      - key: BROKER_SYNC_TOKEN
+        generateValue: true
