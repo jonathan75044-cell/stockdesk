@@ -17,7 +17,7 @@ balances/holdings are NOT imported by this version. No order endpoints exist.
    and configuration must survive restarts. Run one service instance/worker only.
 4. Enter SCHWAB_APP_KEY, SCHWAB_APP_SECRET and FINNHUB_TOKEN in Render's private
    environment settings. Set SCHWAB_CALLBACK_URL to
-   https://YOUR-SERVICE.onrender.com/auth/schwab/callback
+   [https://YOUR-SERVICE.onrender.com/auth/schwab/callback](https://stockdesk-agent.onrender.com/auth/schwab/callback)
    using your actual service URL. If Render has not assigned it yet, deploy first
    with this setting blank, then set the exact URL and redeploy. Scanning stays off
    until all required settings and authorization are complete.
