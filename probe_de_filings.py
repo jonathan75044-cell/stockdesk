@@ -45,7 +45,7 @@ def main():
     report={'checked_at':datetime.now(timezone.utc).isoformat(),'endpoint':'stock/financials-reported',
             'frequency':'annual','probes':[]}
     checks=[('DE ticker',{'symbol':'DE','freq':'annual'}),
-            ('Deere SEC identifier',{'cik':'0000315189','freq':'annual'}),
+            ('Deere SEC identifier',{'cik':'315189','freq':'annual'}),
             ('AAPL control',{'symbol':'AAPL','freq':'annual'})]
     for name,params in checks:
         result={'name':name,'query':params,**probe(token,params)}
