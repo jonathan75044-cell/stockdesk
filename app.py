@@ -1,3 +1,4 @@
+import live_import
 import os,json,time,threading,hashlib,hmac,base64,sqlite3,secrets
 from pathlib import Path
 from datetime import datetime,timezone,timedelta
@@ -6,6 +7,7 @@ from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 from urllib.parse import urlparse,parse_qs
 from http.cookies import SimpleCookie
 from schwab import Schwab
+import journal
 import requests
 from provider import Data
 from broker import validate_snapshot,portfolio_status
@@ -24,9 +26,16 @@ def save(k,v):
 def config():
     defaults=json.loads((ROOT/'config.json').read_text())
     saved=get('config',{})
-    if get('rules_version')!=2:
-        saved.update({k:defaults[k] for k in ('put_delta_min','put_delta_max','put_max_spread_fraction')})
-        save('config',saved);save('rules_version',2)
+    if get('rules_version')!=3:
+        # One-time migration of the requested filters; preserve universe, cash and notification preferences.
+        keys=('put_delta_min','put_delta_max','put_otm_min','put_otm_max',
+              'put_min_oi','put_max_spread_fraction','put_max_spread_dollars',
+              'min_avg_volume','min_current_ratio','max_debt_equity','swing_min_rr')
+        saved.update({k:defaults[k] for k in keys})
+        save('config',saved);save('rules_version',3)
+        previous=get('state',{})
+        previous.update(status='Rules updated · awaiting fresh scan',rows=[],completed_at=None)
+        save('state',previous);save('morning_digest',None)
     return {**defaults,**saved}
 def stamp():return datetime.now(timezone.utc).isoformat()
 def status():
@@ -64,11 +73,10 @@ def scan(morning=False):
                 quality=fundamental_gate(research,cfg,today)
                 if not quality:continue
                 sw=swing(price,days,cfg)
-                if symbol=='JD' and sw and not data.jd_hold(today):sw=None
                 puts=[]
                 if price>m['ma20']>m['ma50']:
                     for opt in data.options(symbol,today,cfg):
-                        candidate=put_candidate(price,opt,cfg,today)
+                        candidate=put_candidate(price,opt,cfg,today,zone)
                         if candidate:puts.append(candidate)
                 if not(sw or puts):continue
                 dates=[datetime.fromisoformat(e['date']).date() for e in research['earnings'] if e.get('date')]
@@ -173,10 +181,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer');self.end_headers()
             except Exception:self.respond({'error':'Schwab authorization failed or expired. Start Connect Schwab again.'},400)
             return
+        if path=='/api/journal/schwab':self.respond({'entries':live_import.rows(conn),'status':get('schwab_import_status',{}),'enabled':get('schwab_import_enabled',True)});return
+        if path=='/api/journal':self.respond({'entries':journal.rows(conn)});return
+        if path=='/journal':
+            raw=(ROOT/'journal.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
         if self.path!='/':self.send_error(404);return
-        raw=(ROOT/'index.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
+        raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
     def do_POST(self):
         if self.path=='/api/broker/snapshot':
             token=os.getenv('BROKER_SYNC_TOKEN','')
@@ -191,6 +203,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.auth():return
         if self.headers.get('X-Stockdesk')!='1':self.respond({'error':'Request rejected'},403);return
+        if self.path=='/api/journal/schwab/sync':
+            threading.Thread(target=live_import.sync,args=(conn,get,save,Schwab()),daemon=True).start();self.respond({'queued':True});return
+        if self.path=='/api/journal/schwab/toggle':
+            save('schwab_import_enabled',not get('schwab_import_enabled',True));self.respond({'ok':True});return
+        if self.path=='/api/journal':
+            try:
+                n=int(self.headers.get('Content-Length','0'))
+                if not 0<n<=32000:raise ValueError('Entry is too large')
+                identifier=journal.write(conn,json.loads(self.rfile.read(n)))
+                self.respond({'ok':True,'id':identifier})
+            except (ValueError,TypeError,OverflowError):self.respond({'error':'Invalid entry. Check dates, quantity, prices, and required put fields. Closed trades need an exit price and close date.'},400)
+            return
         if self.path=='/api/scan':threading.Thread(target=scan,daemon=True).start();self.respond({'queued':True});return
         if self.path=='/api/config':
             try:
@@ -216,5 +240,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_error(404)
 if __name__=='__main__':
+    threading.Thread(target=live_import.worker,args=(conn,get,save,Schwab),daemon=True).start()
     threading.Thread(target=agent,daemon=True).start()
     ThreadingHTTPServer(('0.0.0.0',int(os.getenv('PORT','8000'))),Handler).serve_forever()
