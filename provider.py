@@ -27,7 +27,7 @@ class Data:
         metrics=self.fh('stock/metric',symbol=symbol,metric='all').get('metric',{})
         news=self.fh('company-news',symbol=symbol,**{'from':str(today-timedelta(days=7)),'to':str(today)})
         if not metrics or not isinstance(news,list): raise ValueError('Research data unavailable')
-        quality=self.quality(symbol)
+        quality=self.quality(symbol,today)
         return dict(quality=quality,earnings=earnings['earningsCalendar'],metrics=metrics,news=[{'headline':n.get('headline'),'url':n.get('url'),'datetime':n.get('datetime'),'source':n.get('source')} for n in news[:4]])
     def jd_hold(self,today):
         # 15-minute regular-session bars combined into complete 9:30-anchored hours.
@@ -49,8 +49,8 @@ class Data:
         baseline=[b['volume'] for k,b in bars[:-1] if k[1]==bars[-1][0][1]]
         return len(baseline)>=10 and all(b['close']>27.15 for b in recent[:3]) and recent[2]['close']<=27.60 and recent[3]['close']>27.60 and recent[4]['low']>27.60 and recent[4]['volume']>sum(baseline)/len(baseline)*1.3
 
-    def quality(self,symbol):
-        return parse_annual_quality(self.fh('stock/financials-reported',symbol=symbol,freq='annual'))
+    def quality(self,symbol,today=None):
+        return parse_annual_quality(self.fh('stock/financials-reported',symbol=symbol,freq='annual'),today)
 
 
 class FundamentalDataError(ValueError):
@@ -60,7 +60,7 @@ class FundamentalDataError(ValueError):
         self.details=details
 
 
-def parse_annual_quality(payload):
+def parse_annual_quality(payload,today=None):
     """Conservative annual US-GAAP parser; no fuzzy matching of custom concepts."""
     audit={'basis':'Annual filings, not quarterly or TTM','fields':{}}
     def fail(message):
@@ -75,6 +75,13 @@ def parse_annual_quality(payload):
     current=unique[0]
     try:
         end=date.fromisoformat(current['endDate'][:10])
+    except (KeyError,TypeError,ValueError):
+        fail('Invalid latest annual reporting period')
+    age=((today or date.today())-end).days
+    audit.update(period=str(end),filed_at=current.get('filedDate'),age_days=age,max_age_days=550)
+    if not 0<=age<=550:
+        fail('Latest available annual period '+str(end)+' is outside 0–550 days; fresh fundamental evidence required')
+    try:
         previous=next(f for f in unique[1:] if 300<=(end-date.fromisoformat(f['endDate'][:10])).days<=430)
     except (KeyError,TypeError,ValueError,StopIteration):
         fail('No comparable annual period 300–430 days earlier')

@@ -9,7 +9,7 @@ from http.cookies import SimpleCookie
 from schwab import Schwab
 import journal
 import requests
-from provider import Data
+from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone
 ROOT=Path(__file__).parent
@@ -109,6 +109,9 @@ def scan(morning=False):
                 state['rows'].append(row);detail['outcome']='Qualified before final freshness and result limit'
             except Exception as e:
                 detail['outcome']='Data or processing error'
+                if isinstance(e,FundamentalDataError):
+                    detail['outcome']='Fundamentals failed or missing'
+                    detail['fundamental_rejections']=[str(e)]
                 detail['error_type']=type(e).__name__
                 # Only controlled provider errors are safe to show verbatim.
                 # Other exceptions can contain request URLs or credentials.
