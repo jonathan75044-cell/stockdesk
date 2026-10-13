@@ -58,41 +58,64 @@ def scan(morning=False):
             s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);return
         today=datetime.now(ZoneInfo('America/New_York')).date()
         symbols=list(dict.fromkeys(cfg['universe'].split()))
-        state={'status':'Scanning','started_at':stamp(),'rows':[],'errors':[],'scanned':0,'total':len(symbols)};save('state',state)
+        state={'status':'Scanning','started_at':stamp(),'rows':[],'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
         for symbol in symbols:
+            detail={'symbol':symbol,'outcome':'Processing','stage':'Quote'}
+            state['diagnostics'].append(detail)
             try:
                 q=data.quotes([symbol])[0]
                 ts=float(q['trade_date'])/1000
                 if abs(time.time()-ts)>900:raise ValueError('Stale underlying quote')
+                detail['stage']='Daily history'
                 price=float(q['last']);days=data.days(symbol,today);m=indicators(days)
                 if not days or (today-datetime.fromisoformat(days[-1]['date']).date()).days>5: raise ValueError('Daily history stale')
-                if price<cfg['min_price'] or m['avgvol']<cfg['min_avg_volume']:continue
+                if price<cfg['min_price']:
+                    detail['outcome']='Below minimum price';continue
+                if m['avgvol']<cfg['min_avg_volume']:
+                    detail['outcome']='Below minimum average volume';continue
+                detail['stage']='Demand zone'
                 zone=demand_zone(price,days,cfg)
-                if not zone:continue
+                if not zone:
+                    detail['outcome']='No confirmed demand zone';continue
+                detail['stage']='Finnhub research'
                 research=data.research(symbol,today,cfg['put_dte_max']+cfg['earnings_buffer_days'])
                 quality=fundamental_gate(research,cfg,today)
-                if not quality:continue
-                sw=swing(price,days,cfg)
-                puts=[]
+                if not quality:
+                    detail['outcome']='Fundamentals failed or missing';detail['fundamentals']=research.get('quality',{});continue
+                detail['stage']='Swing and options'
+                detail['swing_rejections']=[];detail['put_rejections']={}
+                sw=swing(price,days,cfg,detail['swing_rejections'])
+                puts=[];detail['contracts_checked']=0
+                detail['put_trend_passed']=price>m['ma20']>m['ma50']
                 if price>m['ma20']>m['ma50']:
                     for opt in data.options(symbol,today,cfg):
-                        candidate=put_candidate(price,opt,cfg,today,zone)
+                        reasons=[];detail['contracts_checked']+=1
+                        candidate=put_candidate(price,opt,cfg,today,zone,reasons)
+                        for reason in reasons:detail['put_rejections'][reason]=detail['put_rejections'].get(reason,0)+1
                         if candidate:puts.append(candidate)
-                if not(sw or puts):continue
+                if not(sw or puts):
+                    detail['outcome']='No qualifying swing or put';continue
                 dates=[datetime.fromisoformat(e['date']).date() for e in research['earnings'] if e.get('date')]
                 if any(d<=today+timedelta(days=14+cfg['earnings_buffer_days']) for d in dates):sw=None
                 puts=[c for c in puts if not any(d<=datetime.fromisoformat(c['expiry']).date()+timedelta(days=cfg['earnings_buffer_days']) for d in dates)]
-                if not(sw or puts):continue
+                if not(sw or puts):
+                    detail['outcome']='Earnings exclusion';continue
                 best=max(puts,key=lambda c:c['score']) if puts else None
                 row={'quality':quality,'demand_zone':zone,'symbol':symbol,'name':q.get('description',symbol),'price':price,'volume':q.get('volume'),'quote_at':datetime.fromtimestamp(ts,timezone.utc).isoformat(),'swing':sw,'put':best,'score':max(sw['score'] if sw else 0,best['score'] if best else 0),'research':research,'ma20':m['ma20'],'ma50':m['ma50'],'asof':stamp(),'earnings_note':'No scheduled event returned in the screened horizon; calendar may change.'}
-                state['rows'].append(row)
+                state['rows'].append(row);detail['outcome']='Qualified before final freshness and result limit'
             except Exception as e:
+                detail['outcome']='Data or processing error'
+                detail['error_type']=type(e).__name__
                 # Do not expose URLs containing API keys.
                 state['errors'].append({'symbol':symbol,'reason':str(e) if isinstance(e,ValueError) else type(e).__name__+' · data unavailable'})
             finally:
                 state['scanned']+=1;save('state',state)
         state['rows']=[r for r in state['rows'] if time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900 and (not r['put'] or time.time()-r['put']['quote_timestamp']<=900)]
         state['rows']=sorted(state['rows'],key=lambda x:x['score'],reverse=True)[:cfg['max_results']]
+        selected={r['symbol'] for r in state['rows']}
+        for detail in state['diagnostics']:
+            if detail['outcome']=='Qualified before final freshness and result limit':
+                detail['outcome']='Displayed' if detail['symbol'] in selected else 'Final freshness or result limit exclusion'
         state['status']='Monitoring';state['completed_at']=stamp();save('state',state)
         if morning:
             digest={'date':str(today),'completed_at':stamp(),'rows':state['rows'],'errors':state['errors'],'note':'Qualified at scan time; recheck live quotes before acting.'}
@@ -183,12 +206,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path=='/api/journal/schwab':self.respond({'entries':live_import.rows(conn),'status':get('schwab_import_status',{}),'enabled':get('schwab_import_enabled',True)});return
         if path=='/api/journal':self.respond({'entries':journal.rows(conn)});return
+        if path=='/diagnostics':
+            raw=(ROOT/'diagnostics.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if path=='/journal':
             raw=(ROOT/'journal.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
         if self.path!='/':self.send_error(404);return
-        raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
+        raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a><a href="/diagnostics" style="margin:0 18px;color:inherit">Scan diagnostics</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
     def do_POST(self):
         if self.path=='/api/broker/snapshot':
             token=os.getenv('BROKER_SYNC_TOKEN','')

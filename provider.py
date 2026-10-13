@@ -11,7 +11,12 @@ class Data:
     def fh(self,path,**params):
         time.sleep(1.1)
         r=requests.get('https://finnhub.io/api/v1/'+path,params={**params,'token':self.finn},timeout=25)
-        r.raise_for_status();return r.json()
+        if r.status_code>=400:
+            raise ValueError('Finnhub '+path+' request failed (status '+str(r.status_code)+'); check access, key or rate limits')
+        payload=r.json()
+        if isinstance(payload,dict) and payload.get('error'):
+            raise ValueError('Finnhub '+path+' returned an error; check access, key or rate limits')
+        return payload
     def clock(self):return self.schwab.clock()
     def quotes(self,symbols):return self.schwab.quotes(symbols)
     def days(self,symbol,today):return self.schwab.days(symbol,today)
