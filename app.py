@@ -57,7 +57,7 @@ def scan(morning=False):
         if data.clock()['state']!='open':
             s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);return
         today=datetime.now(ZoneInfo('America/New_York')).date()
-        symbols=list(dict.fromkeys(cfg['universe'].split()))
+        symbols=list(dict.fromkeys('XYZ' if x.upper()=='SQ' else x.upper() for x in cfg['universe'].split()))
         state={'status':'Scanning','started_at':stamp(),'rows':[],'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
         for symbol in symbols:
             detail={'symbol':symbol,'outcome':'Processing','stage':'Quote'}
@@ -108,6 +108,8 @@ def scan(morning=False):
             except Exception as e:
                 detail['outcome']='Data or processing error'
                 detail['error_type']=type(e).__name__
+                if isinstance(e,ValueError):detail['error']=str(e)
+                if hasattr(e,'details'):detail['financial_diagnostics']=e.details
                 # Do not expose URLs containing API keys.
                 state['errors'].append({'symbol':symbol,'reason':str(e) if isinstance(e,ValueError) else type(e).__name__+' · data unavailable'})
             finally:
