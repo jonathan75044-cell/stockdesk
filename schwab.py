@@ -8,6 +8,11 @@ import requests
 
 GUARD=threading.RLock()
 NY=ZoneInfo('America/New_York')
+SCHWAB_SYMBOLS={'BRK.B':'BRK/B'}
+
+def market_symbol(symbol):
+    return SCHWAB_SYMBOLS.get(symbol,symbol)
+
 class Schwab:
     def __init__(self):
         self.key=os.getenv('SCHWAB_APP_KEY','')
@@ -67,24 +72,24 @@ class Schwab:
         opened=bool(market.get('isOpen')) and any(datetime.fromisoformat(p['start'])<=now<datetime.fromisoformat(p['end']) for p in regular)
         return {'state':'open' if opened else 'closed'}
     def quotes(self,symbols):
-        raw=self.get('quotes',symbols=','.join(symbols),fields='quote,reference')
+        raw=self.get('quotes',symbols=','.join(market_symbol(s) for s in symbols),fields='quote,reference')
         result=[]
         for symbol in symbols:
-            item=raw.get(symbol,{})
+            item=raw.get(market_symbol(symbol),{})
             if not isinstance(item,dict) or not item:raise ValueError('Schwab returned no quote for '+symbol+'; verify symbol and coverage')
             if item.get('realtime') is not True:raise ValueError('Schwab quote for '+symbol+' is delayed or has no real-time flag; verify entitlement')
             q=item.get('quote',{})
             result.append({'symbol':symbol,'description':item.get('reference',{}).get('description',symbol),'last':q.get('lastPrice'),'volume':q.get('totalVolume'),'trade_date':q.get('tradeTime')})
         return result
     def days(self,symbol,today):
-        raw=self.get('pricehistory',symbol=symbol,periodType='year',period=2,frequencyType='daily',frequency=1,needExtendedHoursData='false')
+        raw=self.get('pricehistory',symbol=market_symbol(symbol),periodType='year',period=2,frequencyType='daily',frequency=1,needExtendedHoursData='false')
         rows=[]
         for c in raw.get('candles',[]):
             d=datetime.fromtimestamp(c['datetime']/1000,NY).date()
             if d<today:rows.append({**c,'date':str(d)})
         return sorted(rows,key=lambda c:c['date'])
     def options(self,symbol,today,cfg):
-        raw=self.get('chains',symbol=symbol,contractType='PUT',strategy='SINGLE',includeUnderlyingQuote='true',fromDate=str(today+timedelta(days=cfg['put_dte_min'])),toDate=str(today+timedelta(days=cfg['put_dte_max'])))
+        raw=self.get('chains',symbol=market_symbol(symbol),contractType='PUT',strategy='SINGLE',includeUnderlyingQuote='true',fromDate=str(today+timedelta(days=cfg['put_dte_min'])),toDate=str(today+timedelta(days=cfg['put_dte_max'])))
         if raw.get('isDelayed') is not False:raise ValueError('Real-time Schwab option chain required')
         for exp,strikes in raw.get('putExpDateMap',{}).items():
             for contracts in strikes.values():
