@@ -50,7 +50,25 @@ class Data:
         return len(baseline)>=10 and all(b['close']>27.15 for b in recent[:3]) and recent[2]['close']<=27.60 and recent[3]['close']>27.60 and recent[4]['low']>27.60 and recent[4]['volume']>sum(baseline)/len(baseline)*1.3
 
     def quality(self,symbol,today=None):
-        return parse_annual_quality(self.fh('stock/financials-reported',symbol=symbol,freq='annual'),today)
+        today=today or date.today()
+        try:
+            return parse_annual_quality(self.fh('stock/financials-reported',symbol=symbol,freq='annual'),today)
+        except (ValueError,requests.RequestException) as original:
+            if symbol!='DE':raise
+            from sec_fundamentals import load_annual_payload,SECDataError
+            original_audit=getattr(original,'details',{})
+            audit={}
+            try:
+                payload,audit=load_annual_payload(symbol,today)
+                quality=parse_annual_quality(payload,today)
+            except (SECDataError,FundamentalDataError) as fallback:
+                details={'finnhub':original_audit,'sec':{**audit,**fallback.details}}
+                raise FundamentalDataError(str(fallback),details) from None
+            quality.update(source='SEC EDGAR annual 10-K companyfacts',
+                           filing_url=audit['filing_url'],sec_audit=audit,
+                           fallback_reason='Finnhub annual evidence unavailable or invalid',
+                           finnhub_audit=original_audit)
+            return quality
 
 
 class FundamentalDataError(ValueError):

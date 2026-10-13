@@ -12,7 +12,7 @@ import requests
 from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
-BUILD='watchlist-2026-10-13'
+BUILD='sec-fallback-2026-10-13'
 ROOT=Path(__file__).parent
 STORE=Path(os.getenv('DATA_DIR',str(ROOT/'data')));STORE.mkdir(exist_ok=True,parents=True)
 DB=STORE/'state.db'
@@ -91,6 +91,9 @@ def scan(morning=False):
                     detail['outcome']='No confirmed demand zone';continue
                 detail['stage']='Finnhub research'
                 research=data.research(symbol,today,cfg['put_dte_max']+cfg['earnings_buffer_days'])
+                detail['fundamental_source']=research.get('quality',{}).get('source')
+                if research.get('quality',{}).get('sec_audit'):
+                    detail['sec_audit']=research['quality']['sec_audit']
                 detail['fundamental_rejections']=[]
                 quality=fundamental_gate(research,cfg,today,detail['fundamental_rejections'])
                 detail['leverage_rule']={'metric':'Total liabilities / total equity',
