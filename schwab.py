@@ -71,7 +71,8 @@ class Schwab:
         result=[]
         for symbol in symbols:
             item=raw.get(symbol,{})
-            if item.get('realtime') is not True:raise ValueError('Real-time Schwab quote required')
+            if not isinstance(item,dict) or not item:raise ValueError('Schwab returned no quote for '+symbol+'; verify symbol and coverage')
+            if item.get('realtime') is not True:raise ValueError('Schwab quote for '+symbol+' is delayed or has no real-time flag; verify entitlement')
             q=item.get('quote',{})
             result.append({'symbol':symbol,'description':item.get('reference',{}).get('description',symbol),'last':q.get('lastPrice'),'volume':q.get('totalVolume'),'trade_date':q.get('tradeTime')})
         return result

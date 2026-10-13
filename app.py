@@ -74,12 +74,14 @@ def scan(morning=False):
                 if m['avgvol']<cfg['min_avg_volume']:
                     detail['outcome']='Below minimum average volume';continue
                 detail['stage']='Demand zone'
-                zone=demand_zone(price,days,cfg)
+                detail['demand_rejections']=[]
+                zone=demand_zone(price,days,cfg,detail['demand_rejections'])
                 if not zone:
                     detail['outcome']='No confirmed demand zone';continue
                 detail['stage']='Finnhub research'
                 research=data.research(symbol,today,cfg['put_dte_max']+cfg['earnings_buffer_days'])
-                quality=fundamental_gate(research,cfg,today)
+                detail['fundamental_rejections']=[]
+                quality=fundamental_gate(research,cfg,today,detail['fundamental_rejections'])
                 if not quality:
                     detail['outcome']='Fundamentals failed or missing';detail['fundamentals']=research.get('quality',{});continue
                 detail['stage']='Swing and options'

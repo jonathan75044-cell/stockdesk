@@ -1,4 +1,4 @@
-import os,time,requests
+import os,time,requests,math
 from datetime import date,timedelta
 
 def many(x): return [] if x is None else x if isinstance(x,list) else [x]
@@ -56,7 +56,7 @@ class Data:
         unique=[]
         for f in filings:
             if f.get('endDate') not in [x.get('endDate') for x in unique]:unique.append(f)
-        if len(unique)<2:return {}
+        if len(unique)<2:raise ValueError('Fundamental data unavailable: fewer than two annual reporting periods; verify financials-reported coverage')
         current=unique[0]
         def value(f,section,tags):
             rows=f.get('report',{}).get(section,[])
@@ -64,8 +64,10 @@ class Data:
             for tag in tags:
                 for r in rows:
                     if r.get('concept','').split('_',1)[-1].split(':')[-1]==tag:
-                        return float(r['value'])
-            raise ValueError('Required financial field unavailable')
+                        v=float(r['value'])
+                        if not math.isfinite(v):raise ValueError('Non-finite financial field: '+tag)
+                        return v
+            raise ValueError('Missing annual '+section+' field: '+tags[0])
         try:
             previous=next(f for f in unique[1:] if 300<=(date.fromisoformat(current['endDate'][:10])-date.fromisoformat(f['endDate'][:10])).days<=430)
             rev=['RevenueFromContractWithCustomerExcludingAssessedTax','Revenues','SalesRevenueNet','RevenueFromContractWithCustomerIncludingAssessedTax']
@@ -76,6 +78,12 @@ class Data:
             equity=value(current,'bs',['StockholdersEquity','StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest'])
             # Total liabilities / equity is a stricter, explicit proxy for debt / equity.
             debt=value(current,'bs',['Liabilities'])
-            if min(prior,liabilities,equity)<=0 or capex<0:return {}
+            if min(prior,liabilities,equity)<=0:raise ValueError('Fundamental ratios unavailable: prior revenue, current liabilities or equity is non-positive')
+            if capex<0:raise ValueError('Capital expenditure sign is unsupported; FCF not inferred')
             return dict(period=current['endDate'][:10],filed_at=current.get('filedDate'),revenue_growth_pct=100*(revenue/prior-1),fcf=ocf-capex,current_ratio=assets/liabilities,debt_equity=debt/equity,balance_measure='Total liabilities / equity (conservative debt proxy)',source='Finnhub annual financials as reported',access_number=current.get('accessNumber'))
-        except (ValueError,TypeError,KeyError,StopIteration):return {}
+        except StopIteration:
+            raise ValueError('Fundamental data unavailable: no comparable annual period 300–430 days earlier') from None
+        except ValueError as exc:
+            raise ValueError('Fundamental data unavailable: '+str(exc)) from None
+        except (TypeError,KeyError):
+            raise ValueError('Fundamental data unavailable: malformed annual filing fields') from None

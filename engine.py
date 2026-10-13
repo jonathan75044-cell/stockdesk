@@ -50,30 +50,52 @@ def put_candidate(price,option,cfg,today,zone=None,reasons=None):
 
 
 
-def fundamental_gate(research,cfg,today):
+def fundamental_gate(research,cfg,today,reasons=None):
     """Fail closed on missing, old, or uncomputable fiscal evidence."""
     f=research.get('quality',{})
     try:
         age=(today-date.fromisoformat(f['period'][:10])).days
         vals=[float(f[k]) for k in ('revenue_growth_pct','fcf','current_ratio','debt_equity')]
-        if not all(math.isfinite(v) for v in vals) or not 0<=age<=550:return None
+        if not all(math.isfinite(v) for v in vals) or not 0<=age<=550:
+            if reasons is not None:reasons.append('Non-finite metrics or annual period outside 0–550 days')
+            return None
         growth,fcf,current,debt=vals
-        if not(growth>0 and fcf>0 and current>=cfg['min_current_ratio'] and 0<=debt<=cfg['max_debt_equity']):return None
+        failures=[]
+        if growth<=0:failures.append('Annual revenue is not increasing')
+        if fcf<=0:failures.append('Annual free cash flow is not positive')
+        if current<cfg['min_current_ratio']:failures.append('Current ratio below minimum')
+        if not 0<=debt<=cfg['max_debt_equity']:failures.append('Total liabilities/equity outside configured range')
+        if failures:
+            if reasons is not None:reasons.extend(failures)
+            return None
         return f
-    except (KeyError,TypeError,ValueError):return None
+    except (KeyError,TypeError,ValueError):
+        if reasons is not None:reasons.append('Required fundamental metric missing or invalid')
+        return None
 
-def demand_zone(price,days,cfg):
+def demand_zone(price,days,cfg,reasons=None):
     """Confirmed pivot, subsequent retest and bullish close; never a forward-looking pivot."""
     m=indicators(days);a=m['atr']
-    if a<=0:return None
+    if a<=0:
+        if reasons is not None:reasons.append('ATR must be positive')
+        return None
+    pivots=retests=intact=0
     for i in range(len(days)-5,max(2,len(days)-45)-1,-1):
         low=float(days[i]['low'])
         if not all(low<float(days[j]['low']) for j in (i-2,i-1,i+1,i+2)):continue
+        pivots+=1
         upper=low+.5*a
         for j in range(max(i+3,len(days)-5),len(days)):
             b=days[j]
             if not(low<=float(b['low'])<=upper and float(b['close'])>upper and float(b['close'])>float(b.get('open',b['close']))):continue
+            retests+=1
             if any(float(x['low'])<low for x in days[i+1:]):continue
+            intact+=1
             if upper<price<=upper+cfg['demand_max_distance_atr']*a:
                 return dict(low=round(low,2),high=round(upper,2),pivot_date=days[i].get('date'),confirmed_date=b.get('date'),method='Daily pivot + retest + bullish close above zone')
+    if reasons is not None:
+        reasons.append('No confirmed pivot in lookback' if not pivots else
+                       'No bullish retest within last five completed sessions' if not retests else
+                       'Retested zones invalidated by a lower low' if not intact else
+                       'Current price not above intact zone within configured ATR distance')
     return None
