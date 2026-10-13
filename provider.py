@@ -1,5 +1,5 @@
 import os,time,requests,math
-from datetime import date,timedelta
+from datetime import date,timedelta,datetime,timezone
 
 def many(x): return [] if x is None else x if isinstance(x,list) else [x]
 class Data:
@@ -69,6 +69,33 @@ class Data:
                            fallback_reason='Finnhub annual evidence unavailable or invalid',
                            finnhub_audit=original_audit)
             return quality
+
+    def display_metadata(self,symbol,metrics=None):
+        """Optional display context. Its availability never changes eligibility."""
+        result={'sector':None,'pe_ttm':None,'source':'Finnhub gsector / peTTM',
+                'retrieved_at':datetime.now(timezone.utc).isoformat(),'notes':[]}
+        try:
+            profile=self.fh('stock/profile',symbol=symbol)
+            sector=profile.get('gsector') if isinstance(profile,dict) else None
+            if isinstance(sector,str) and sector.strip() and not sector.strip().isdigit():
+                result['sector']=sector.strip()[:100]
+            else:result['notes'].append('Sector classification unavailable; industry is not substituted')
+        except (ValueError,requests.RequestException):
+            result['notes'].append('Sector profile unavailable; endpoint may require additional account access')
+        try:
+            if metrics is None:metrics=self.fh('stock/metric',symbol=symbol,metric='all').get('metric',{})
+            result['pe_ttm']=positive_pe(metrics.get('peTTM'))
+            if result['pe_ttm'] is None:result['notes'].append('P/E TTM missing, non-finite or non-positive')
+        except (ValueError,TypeError,AttributeError,requests.RequestException):
+            result['notes'].append('P/E metrics unavailable')
+        return result
+
+
+def positive_pe(value):
+    if isinstance(value,bool):return None
+    try:result=float(value)
+    except (TypeError,ValueError):return None
+    return result if math.isfinite(result) and result>0 else None
 
 
 class FundamentalDataError(ValueError):

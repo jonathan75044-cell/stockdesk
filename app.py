@@ -6,13 +6,15 @@ from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 from urllib.parse import urlparse,parse_qs
 from http.cookies import SimpleCookie
+from contextlib import closing
 from schwab import Schwab
 import journal
 import requests
 from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
-BUILD='sec-fallback-2026-10-13'
+BUILD='valuation-2026-10-13'
+from valuation import validate_model,estimate
 ROOT=Path(__file__).parent
 STORE=Path(os.getenv('DATA_DIR',str(ROOT/'data')));STORE.mkdir(exist_ok=True,parents=True)
 DB=STORE/'state.db'
@@ -43,6 +45,11 @@ def status():
     state=get('state',{'status':'Setup required','rows':[],'errors':[]})
     state['build']=BUILD
     state.setdefault('watchlist',[])
+    models=get('valuation_models',{})
+    state['valuation_models']=models
+    valuation_today=datetime.now(ZoneInfo('America/New_York')).date()
+    for item in state.get('rows',[])+state.get('watchlist',[]):
+        item['valuation']=estimate(item.get('price'),models.get(item['symbol']),valuation_today)
     state['configured']=bool(Schwab().connected() and os.getenv('FINNHUB_TOKEN'))
     state['market_data_source']='Charles Schwab'
     state['schwab']={'configured':Schwab().configured(),'connected':Schwab().connected()}
@@ -145,6 +152,26 @@ def scan(morning=False):
         state['watchlist']=sorted([w for w in state['watchlist'] if
             0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900],
             key=lambda w:(w['distance_atr'],w['symbol']))[:cfg['max_results']]
+        # Enrich displayed tables only; these fields are never screening gates.
+        state['status']='Loading table metadata';save('state',state)
+        metadata_deadline=time.monotonic()+120
+        for item in state['rows']+state['watchlist']:
+            metadata_key='display_metadata:'+item['symbol']
+            cached=get(metadata_key)
+            cached_age=(datetime.now(timezone.utc)-datetime.fromisoformat(cached['retrieved_at'])).total_seconds() if cached else None
+            if cached is not None and 0<=cached_age<3600:
+                item['display_metadata']=cached
+            elif time.monotonic()<metadata_deadline:
+                item['display_metadata']=data.display_metadata(item['symbol'],item.get('research',{}).get('metrics'))
+                save(metadata_key,item['display_metadata'])
+            else:
+                item['display_metadata']={'sector':None,'pe_ttm':None,'notes':['Metadata time budget reached; retry on a later scan']}
+            detail=next((d for d in state['diagnostics'] if d['symbol']==item['symbol']),None)
+            if detail is not None:detail['display_metadata']=item['display_metadata']
+        # Extra display requests must not extend the freshness of trade quotes.
+        state['rows']=[r for r in state['rows'] if 0<=time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900
+                       and (not r['put'] or 0<=time.time()-r['put']['quote_timestamp']<=900)]
+        state['watchlist']=[w for w in state['watchlist'] if 0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900]
         selected={r['symbol'] for r in state['rows']}
         for detail in state['diagnostics']:
             if detail['outcome']=='Qualified before final freshness and result limit':
@@ -261,6 +288,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.auth():return
         if self.headers.get('X-Stockdesk')!='1':self.respond({'error':'Request rejected'},403);return
+        if self.path=='/api/valuation':
+            try:
+                n=int(self.headers.get('Content-Length','0'))
+                if not 0<n<=8000:raise ValueError('Valuation request too large')
+                model=validate_model(json.loads(self.rfile.read(n)),datetime.now(ZoneInfo('America/New_York')).date())
+                # Atomically update one model without losing another concurrent edit.
+                with closing(conn()) as c, c:
+                    c.execute('BEGIN IMMEDIATE')
+                    row=c.execute('select v from kv where k=?',('valuation_models',)).fetchone()
+                    models=json.loads(row[0]) if row else {}
+                    if model['symbol'] not in models and len(models)>=500:raise ValueError('Maximum 500 valuation models')
+                    models[model['symbol']]=model
+                    c.execute('insert or replace into kv values (?,?)',('valuation_models',json.dumps(models)))
+                self.respond({'ok':True})
+            except (ValueError,TypeError):self.respond({'error':'Invalid DCF model. Use positive FCFE per share, a cost of equity above terminal growth, 1–10 years, fresh evidence and source notes.'},400)
+            return
         if self.path=='/api/journal/schwab/sync':
             threading.Thread(target=live_import.sync,args=(conn,get,save,Schwab()),daemon=True).start();self.respond({'queued':True});return
         if self.path=='/api/journal/schwab/toggle':
