@@ -75,7 +75,9 @@ def scan(morning=False):
                     detail['outcome']='Below minimum average volume';continue
                 detail['stage']='Demand zone'
                 detail['demand_rejections']=[]
-                zone=demand_zone(price,days,cfg,detail['demand_rejections'])
+                detail['demand_diagnostics']={}
+                zone=demand_zone(price,days,cfg,detail['demand_rejections'],detail['demand_diagnostics'])
+                detail['market_metrics']={'price':price,**m,'last_daily_bar':days[-1]['date']}
                 if not zone:
                     detail['outcome']='No confirmed demand zone';continue
                 detail['stage']='Finnhub research'
@@ -108,10 +110,16 @@ def scan(morning=False):
             except Exception as e:
                 detail['outcome']='Data or processing error'
                 detail['error_type']=type(e).__name__
-                if isinstance(e,ValueError):detail['error']=str(e)
+                # Only controlled provider errors are safe to show verbatim.
+                # Other exceptions can contain request URLs or credentials.
+                if isinstance(e,ValueError) and not isinstance(e,requests.RequestException):detail['error']=str(e)
+                if isinstance(e,(KeyError,TypeError,IndexError,ZeroDivisionError)):
+                    detail['error']='Missing or invalid data during '+detail['stage']
+                if isinstance(e,KeyError):detail['missing_field']=str(e.args[0])[:80]
+                if isinstance(e,requests.RequestException):detail['error']='Provider request failed; check connectivity, access and rate limits'
                 if hasattr(e,'details'):detail['financial_diagnostics']=e.details
                 # Do not expose URLs containing API keys.
-                state['errors'].append({'symbol':symbol,'reason':str(e) if isinstance(e,ValueError) else type(e).__name__+' · data unavailable'})
+                state['errors'].append({'symbol':symbol,'stage':detail['stage'],'reason':detail.get('error',type(e).__name__+' · data unavailable')})
             finally:
                 state['scanned']+=1;save('state',state)
         state['rows']=[r for r in state['rows'] if time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900 and (not r['put'] or time.time()-r['put']['quote_timestamp']<=900)]

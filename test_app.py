@@ -17,7 +17,7 @@ class Rules(unittest.TestCase):
   self.opt['ask']=2;self.assertIsNone(put_candidate(100,self.opt,self.cfg,self.today))
  def test_no_manufactured_targets(self):
   days=[{'close':50+i*.5,'high':51+i*.5,'low':49+i*.5,'volume':2000000} for i in range(70)]
-  days[-1]['close']=86;days[-1]['volume']=4000000
+  days[-1]['close']=86;days[-1]['high']=87;days[-1]['volume']=4000000
   self.assertIsNone(swing(86,days,self.cfg))
 class NewRules(Rules):
  def test_otm_boundary(self):

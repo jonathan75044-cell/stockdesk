@@ -3,6 +3,19 @@ from datetime import date, datetime, timezone
 
 def indicators(days):
     if len(days)<65: raise ValueError('At least 65 completed daily bars required')
+    for i,b in enumerate(days):
+        try:
+            values={k:float(b[k]) for k in ('high','low','close','volume')}
+            if 'open' in b:values['open']=float(b['open'])
+        except (KeyError,TypeError,ValueError):
+            raise ValueError('Daily bar '+str(i)+' has missing or invalid OHLCV fields') from None
+        if (not all(math.isfinite(v) for v in values.values()) or
+            values['low']<=0 or values['volume']<0 or
+            not values['low']<=values['close']<=values['high'] or
+            ('open' in values and not values['low']<=values['open']<=values['high'])):
+            raise ValueError('Daily bar '+str(i)+' has non-finite or inconsistent OHLCV fields')
+    if sum(float(x['volume']) for x in days[-21:-1])<=0:
+        raise ValueError('Average daily volume must be positive')
     close=[float(x['close']) for x in days]
     tr=[max(float(a['high'])-float(a['low']),abs(float(a['high'])-float(b['close'])),abs(float(a['low'])-float(b['close']))) for a,b in zip(days[1:],days)]
     return dict(ma20=sum(close[-20:])/20,ma50=sum(close[-50:])/50,atr=sum(tr[-14:])/14,avgvol=sum(float(x['volume']) for x in days[-21:-1])/20,rvol=float(days[-1]['volume'])/(sum(float(x['volume']) for x in days[-21:-1])/20))
@@ -73,26 +86,46 @@ def fundamental_gate(research,cfg,today,reasons=None):
         if reasons is not None:reasons.append('Required fundamental metric missing or invalid')
         return None
 
-def demand_zone(price,days,cfg,reasons=None):
+def demand_zone(price,days,cfg,reasons=None,diagnostics=None):
     """Confirmed pivot, subsequent retest and bullish close; never a forward-looking pivot."""
     m=indicators(days);a=m['atr']
+    if not math.isfinite(price) or price<=0:raise ValueError('Current price must be finite and positive')
+    if any('open' not in b for b in days):raise ValueError('Demand confirmation requires daily open prices')
     if a<=0:
         if reasons is not None:reasons.append('ATR must be positive')
         return None
+    audit=diagnostics if diagnostics is not None else {}
+    audit.update(bars=len(days),atr=a,price=price,lookback_bars=45,
+                 retest_window_bars=5,max_distance_atr=cfg['demand_max_distance_atr'],
+                 candidates=[])
     pivots=retests=intact=0
-    for i in range(len(days)-5,max(2,len(days)-45)-1,-1):
+    # Two right-hand confirmation bars, then at least one later retest bar.
+    # Index n-4 is eligible: n-3/n-2 confirm and n-1 can retest.
+    for i in range(len(days)-4,max(2,len(days)-45)-1,-1):
         low=float(days[i]['low'])
         if not all(low<float(days[j]['low']) for j in (i-2,i-1,i+1,i+2)):continue
         pivots+=1
         upper=low+.5*a
+        candidate=dict(pivot_date=days[i].get('date'),low=low,high=upper,
+                       distance_atr=(price-upper)/a,outcome='No recent bullish retest')
+        audit['candidates'].append(candidate)
+        invalid=next((x for x in days[i+1:] if float(x['low'])<low),None)
+        if invalid is not None:
+            candidate.update(outcome='Invalidated by lower low',invalidated_date=invalid.get('date'))
         for j in range(max(i+3,len(days)-5),len(days)):
             b=days[j]
             if not(low<=float(b['low'])<=upper and float(b['close'])>upper and float(b['close'])>float(b.get('open',b['close']))):continue
             retests+=1
-            if any(float(x['low'])<low for x in days[i+1:]):continue
+            candidate['retest_date']=b.get('date')
+            if invalid is not None:continue
             intact+=1
+            candidate['outcome']='Current price outside zone distance limits'
             if upper<price<=upper+cfg['demand_max_distance_atr']*a:
-                return dict(low=round(low,2),high=round(upper,2),pivot_date=days[i].get('date'),confirmed_date=b.get('date'),method='Daily pivot + retest + bullish close above zone')
+                candidate['outcome']='Confirmed'
+                audit.update(pivots=pivots,bullish_retests=retests,intact_retests=intact)
+                # Keep exact boundaries for strike eligibility; round only in the UI.
+                return dict(low=low,high=upper,pivot_date=days[i].get('date'),confirmed_date=b.get('date'),method='Daily pivot + retest + bullish close above zone')
+    audit.update(pivots=pivots,bullish_retests=retests,intact_retests=intact)
     if reasons is not None:
         reasons.append('No confirmed pivot in lookback' if not pivots else
                        'No bullish retest within last five completed sessions' if not retests else
