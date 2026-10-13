@@ -77,7 +77,7 @@ def fundamental_gate(research,cfg,today,reasons=None):
         if growth<=0:failures.append('Annual revenue is not increasing')
         if fcf<=0:failures.append('Annual free cash flow is not positive')
         if current<cfg['min_current_ratio']:failures.append('Current ratio below minimum')
-        if not 0<=debt<=cfg['max_debt_equity']:failures.append('Total liabilities/equity outside configured range')
+        if not 0<=debt<=cfg['max_debt_equity']:failures.append('Total liabilities/equity '+str(round(debt,4))+' outside 0–'+str(cfg['max_debt_equity']))
         if failures:
             if reasons is not None:reasons.extend(failures)
             return None
@@ -86,8 +86,10 @@ def fundamental_gate(research,cfg,today,reasons=None):
         if reasons is not None:reasons.append('Required fundamental metric missing or invalid')
         return None
 
-def demand_zone(price,days,cfg,reasons=None,diagnostics=None):
+def demand_zone(price,days,cfg,reasons=None,diagnostics=None,*,retest_window=5):
     """Confirmed pivot, subsequent retest and bullish close; never a forward-looking pivot."""
+    if isinstance(retest_window,bool) or not isinstance(retest_window,int) or not 1<=retest_window<=45:
+        raise ValueError('Retest window must be an integer from 1 to 45')
     m=indicators(days);a=m['atr']
     if not math.isfinite(price) or price<=0:raise ValueError('Current price must be finite and positive')
     if any('open' not in b for b in days):raise ValueError('Demand confirmation requires daily open prices')
@@ -96,7 +98,7 @@ def demand_zone(price,days,cfg,reasons=None,diagnostics=None):
         return None
     audit=diagnostics if diagnostics is not None else {}
     audit.update(bars=len(days),atr=a,price=price,lookback_bars=45,
-                 retest_window_bars=5,max_distance_atr=cfg['demand_max_distance_atr'],
+                 retest_window_bars=retest_window,max_distance_atr=cfg['demand_max_distance_atr'],
                  candidates=[])
     pivots=retests=intact=0
     # Two right-hand confirmation bars, then at least one later retest bar.
@@ -112,7 +114,7 @@ def demand_zone(price,days,cfg,reasons=None,diagnostics=None):
         invalid=next((x for x in days[i+1:] if float(x['low'])<low),None)
         if invalid is not None:
             candidate.update(outcome='Invalidated by lower low',invalidated_date=invalid.get('date'))
-        for j in range(max(i+3,len(days)-5),len(days)):
+        for j in range(max(i+3,len(days)-retest_window),len(days)):
             b=days[j]
             if not(low<=float(b['low'])<=upper and float(b['close'])>upper and float(b['close'])>float(b.get('open',b['close']))):continue
             retests+=1
@@ -128,7 +130,23 @@ def demand_zone(price,days,cfg,reasons=None,diagnostics=None):
     audit.update(pivots=pivots,bullish_retests=retests,intact_retests=intact)
     if reasons is not None:
         reasons.append('No confirmed pivot in lookback' if not pivots else
-                       'No bullish retest within last five completed sessions' if not retests else
+                       ('No bullish retest within last five completed sessions' if retest_window==5 else
+                        'No bullish retest within last '+str(retest_window)+' completed sessions') if not retests else
                        'Retested zones invalidated by a lower low' if not intact else
                        'Current price not above intact zone within configured ATR distance')
     return None
+
+
+def demand_watch_candidate(audit):
+    """Research only: intact pivot within distance, still missing confirmation."""
+    candidates=[c for c in audit.get('candidates',[])
+                if c.get('outcome')=='No recent bullish retest'
+                and 'invalidated_date' not in c
+                and 0<c['distance_atr']<=audit['max_distance_atr']]
+    if not candidates:return None
+    candidate=min(candidates,key=lambda c:c['distance_atr'])
+    return dict(zone={k:candidate[k] for k in ('low','high','pivot_date')},
+                distance_atr=candidate['distance_atr'],trade_eligible=False,
+                pending='Bullish retest within five completed sessions',
+                unchecked=['Fundamentals','Trend and swing rules','Options liquidity and risk','Earnings'],
+                note='Watchlist only. A new scan must pass every trade filter before qualification.')

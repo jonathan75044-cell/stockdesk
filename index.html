@@ -22,4 +22,20 @@ async function loadPortfolio(){
  }catch(_){status.textContent='Portfolio unavailable · connection or authentication failed';box.replaceChildren()}
 }loadPortfolio();setInterval(loadPortfolio,60000);
 </script>
+<script>
+const watchPanel=document.createElement('section');watchPanel.className='panel card';
+const watchTitle=document.createElement('h2');watchTitle.textContent='Watchlist · awaiting demand confirmation';
+const watchNote=document.createElement('p');watchNote.className='note';watchNote.textContent='Research only. These stocks have an intact pivot within the configured distance but lack a recent bullish retest. Fundamentals, trend, options and earnings have not been checked.';
+const watchStatus=document.createElement('p');
+const watchTable=document.createElement('table');
+const watchHead=document.createElement('thead');const watchHeadRow=document.createElement('tr');
+for(const title of ['Stock','Price','Pivot zone','Distance above zone','Pending condition']){const th=document.createElement('th');th.textContent=title;watchHeadRow.append(th)}
+watchHead.append(watchHeadRow);watchTable.append(watchHead);const watchBody=document.createElement('tbody');watchTable.append(watchBody);
+const watchWrap=document.createElement('div');watchWrap.className='tablewrap';watchWrap.append(watchTable);
+watchPanel.append(watchTitle,watchNote,watchStatus,watchWrap);document.querySelector('#desk .reports').before(watchPanel);
+const originalRenderRows=renderRows;
+renderRows=function(){originalRenderRows();const watches=state.watchlist||[];watchBody.replaceChildren();watchStatus.textContent=(state.stale?'Stale or incomplete scan. ':'')+watches.length+' watchlist stocks · trade eligibility requires a fresh complete scan';for(const w of watches){const tr=document.createElement('tr');for(const value of [w.symbol,money(w.price),money(w.zone.low)+' – '+money(w.zone.high),Number(w.distance_atr).toFixed(2)+' ATR',w.pending]){const td=document.createElement('td');td.textContent=value;tr.append(td)}watchBody.append(tr)}if(!watches.length)watchStatus.textContent='No watchlist candidates in the latest scan.'};
+const originalDetail=detail;
+detail=function(sym){originalDetail(sym);const r=state.rows.find(x=>x.symbol===sym);if(!r?.quality)return;const section=document.createElement('section');const h=document.createElement('h3');h.textContent='Screened annual financial evidence';const p=document.createElement('p');p.textContent='Period '+r.quality.period+' · Total liabilities / total equity: '+Number(r.quality.debt_equity).toFixed(4)+' · Maximum: '+state.config.max_debt_equity+'. This gate uses total liabilities, including non-debt obligations.';section.append(h,p);document.querySelector('#detailbody .details').prepend(section)};
+</script>
 </html>

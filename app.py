@@ -11,7 +11,8 @@ import journal
 import requests
 from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
-from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone
+from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
+BUILD='watchlist-2026-10-13'
 ROOT=Path(__file__).parent
 STORE=Path(os.getenv('DATA_DIR',str(ROOT/'data')));STORE.mkdir(exist_ok=True,parents=True)
 DB=STORE/'state.db'
@@ -40,6 +41,8 @@ def config():
 def stamp():return datetime.now(timezone.utc).isoformat()
 def status():
     state=get('state',{'status':'Setup required','rows':[],'errors':[]})
+    state['build']=BUILD
+    state.setdefault('watchlist',[])
     state['configured']=bool(Schwab().connected() and os.getenv('FINNHUB_TOKEN'))
     state['market_data_source']='Charles Schwab'
     state['schwab']={'configured':Schwab().configured(),'connected':Schwab().connected()}
@@ -58,7 +61,7 @@ def scan(morning=False):
             s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);return
         today=datetime.now(ZoneInfo('America/New_York')).date()
         symbols=list(dict.fromkeys('XYZ' if x.upper()=='SQ' else x.upper() for x in cfg['universe'].split()))
-        state={'status':'Scanning','started_at':stamp(),'rows':[],'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
+        state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'scan_build':BUILD,'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
         for symbol in symbols:
             detail={'symbol':symbol,'outcome':'Processing','stage':'Quote'}
             state['diagnostics'].append(detail)
@@ -79,11 +82,20 @@ def scan(morning=False):
                 zone=demand_zone(price,days,cfg,detail['demand_rejections'],detail['demand_diagnostics'])
                 detail['market_metrics']={'price':price,**m,'last_daily_bar':days[-1]['date']}
                 if not zone:
+                    watch=demand_watch_candidate(detail['demand_diagnostics'])
+                    if watch:
+                        watch.update(symbol=symbol,name=q.get('description',symbol),price=price,
+                                     quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat())
+                        state['watchlist'].append(watch)
+                        detail['watchlist']=watch
                     detail['outcome']='No confirmed demand zone';continue
                 detail['stage']='Finnhub research'
                 research=data.research(symbol,today,cfg['put_dte_max']+cfg['earnings_buffer_days'])
                 detail['fundamental_rejections']=[]
                 quality=fundamental_gate(research,cfg,today,detail['fundamental_rejections'])
+                detail['leverage_rule']={'metric':'Total liabilities / total equity',
+                                        'maximum':cfg['max_debt_equity'],
+                                        'value':research.get('quality',{}).get('debt_equity')}
                 if not quality:
                     detail['outcome']='Fundamentals failed or missing';detail['fundamentals']=research.get('quality',{});continue
                 detail['stage']='Swing and options'
@@ -127,6 +139,9 @@ def scan(morning=False):
                 state['scanned']+=1;save('state',state)
         state['rows']=[r for r in state['rows'] if time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900 and (not r['put'] or time.time()-r['put']['quote_timestamp']<=900)]
         state['rows']=sorted(state['rows'],key=lambda x:x['score'],reverse=True)[:cfg['max_results']]
+        state['watchlist']=sorted([w for w in state['watchlist'] if
+            0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900],
+            key=lambda w:(w['distance_atr'],w['symbol']))[:cfg['max_results']]
         selected={r['symbol'] for r in state['rows']}
         for detail in state['diagnostics']:
             if detail['outcome']=='Qualified before final freshness and result limit':
