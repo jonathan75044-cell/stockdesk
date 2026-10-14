@@ -1,5 +1,5 @@
 import live_import
-import os,json,time,threading,hashlib,hmac,base64,sqlite3,secrets
+import os,json,time,threading,hashlib,hmac,base64,sqlite3,secrets,math
 from pathlib import Path
 from datetime import datetime,timezone,timedelta
 from zoneinfo import ZoneInfo
@@ -13,8 +13,13 @@ import requests
 from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
-BUILD='valuation-2026-10-13'
+BUILD='confirmation-workspace-2026-10-13'
 from valuation import validate_model,estimate
+from decision import review_symbol
+from auto_fcfe import estimate_automatic
+from sec_fundamentals import SECDataError
+import tradingview_alerts
+review_lock=threading.Lock()
 ROOT=Path(__file__).parent
 STORE=Path(os.getenv('DATA_DIR',str(ROOT/'data')));STORE.mkdir(exist_ok=True,parents=True)
 DB=STORE/'state.db'
@@ -22,10 +27,10 @@ lock=threading.Lock()
 def conn():
     c=sqlite3.connect(DB);c.execute('create table if not exists kv (k text primary key,v text)');return c
 def get(k,default=None):
-    with conn() as c:r=c.execute('select v from kv where k=?',(k,)).fetchone()
+    with closing(conn()) as c:r=c.execute('select v from kv where k=?',(k,)).fetchone()
     return json.loads(r[0]) if r else default
 def save(k,v):
-    with conn() as c:c.execute('insert or replace into kv values (?,?)',(k,json.dumps(v)))
+    with closing(conn()) as c, c:c.execute('insert or replace into kv values (?,?)',(k,json.dumps(v)))
 def config():
     defaults=json.loads((ROOT/'config.json').read_text())
     saved=get('config',{})
@@ -41,15 +46,62 @@ def config():
         save('state',previous);save('morning_digest',None)
     return {**defaults,**saved}
 def stamp():return datetime.now(timezone.utc).isoformat()
+def json_evidence(value):
+    """Keep optional malformed numeric evidence from breaking the browser JSON."""
+    if isinstance(value,float) and not math.isfinite(value):return None
+    if isinstance(value,dict):return {k:json_evidence(v) for k,v in value.items()}
+    if isinstance(value,(list,tuple)):return [json_evidence(v) for v in value]
+    return value
 def status():
     state=get('state',{'status':'Setup required','rows':[],'errors':[]})
     state['build']=BUILD
     state.setdefault('watchlist',[])
     models=get('valuation_models',{})
     state['valuation_models']=models
+    state['latest_review']=get('latest_review')
+    state['tradingview']={'configured':len(os.getenv('TRADINGVIEW_WEBHOOK_TOKEN',''))>=32,'events':get('tradingview_events',[])[-100:]}
+    review=state['latest_review']
+    if review and review.get('status')=='Completed':
+        session_end=(review.get('clock') or {}).get('regular_session_end')
+        try:market_ready=datetime.now(timezone.utc)<datetime.fromisoformat(session_end)
+        except (TypeError,ValueError):market_ready=False
+        review['market_ready']=market_ready
+        if not market_ready:
+            review['swing_eligible']=False
+            for condition in review.get('checks',[]):
+                if condition['name']=='Regular market session':condition['status']='fail' if session_end else 'unknown'
+        review_ts=review.get('quote',{}).get('trade_date')
+        review['stale']=not isinstance(review_ts,(int,float)) or not 0<=time.time()-review_ts/1000<=900
+        if review['stale']:review['swing_eligible']=False
+        if review['stale']:
+            for condition in review.get('checks',[]):
+                if condition['name']=='Underlying quote freshness':condition['status']='fail'
+        for opt in review.get('options',[]):
+            opt_ts=opt.get('quote_timestamp')
+            opt['stale']=not isinstance(opt_ts,(int,float)) or not 0<=time.time()-opt_ts<=900
+            if review['stale'] or opt['stale'] or not market_ready:opt['trade_eligible']=False
+            if opt['stale']:
+                for condition in opt.get('checks',[]):
+                    if condition['name']=='Quote freshness':condition['status']='fail'
+        review['eligible_contract_count']=sum(o['trade_eligible'] for o in review.get('options',[]))
+    state['decision_preferences']=get('decision_preferences',json.loads((ROOT/'decision_defaults.json').read_text()))
     valuation_today=datetime.now(ZoneInfo('America/New_York')).date()
     for item in state.get('rows',[])+state.get('watchlist',[]):
-        item['valuation']=estimate(item.get('price'),models.get(item['symbol']),valuation_today)
+        review=get('review:'+item['symbol'],{})
+        cached_auto=get('automatic_valuation:'+item['symbol'],{})
+        automatic=cached_auto.get('value') or state.get('automatic_valuations',{}).get(item['symbol']) or (review.get('valuation',{}) if review.get('valuation',{}).get('input_source')=='Automatic SEC evidence' else {})
+        automatic_model=automatic.get('assumptions')
+        item['valuation']=estimate(item.get('price'),models.get(item['symbol']) or automatic_model,valuation_today)
+        if item['symbol'] not in models and automatic and automatic.get('status')!='estimated':item['valuation']=automatic
+        if automatic_model and item['symbol'] not in models:
+            item['valuation']['input_source']='Automatic SEC evidence'
+            item['valuation']['note']=automatic.get('note')
+            item['valuation']['input_audit']=automatic.get('input_audit')
+            item['valuation']['method']=automatic.get('method')
+            share_end=automatic.get('input_audit',{}).get('facts',{}).get('EntityCommonStockSharesOutstanding',{}).get('end')
+            try:share_fresh=0<=(valuation_today-datetime.fromisoformat(share_end).date()).days<=150
+            except (TypeError,ValueError):share_fresh=False
+            if not share_fresh:item['valuation']={'status':'unavailable','reason':'Automatic share-count evidence is stale or unavailable'}
     state['configured']=bool(Schwab().connected() and os.getenv('FINNHUB_TOKEN'))
     state['market_data_source']='Charles Schwab'
     state['schwab']={'configured':Schwab().configured(),'connected':Schwab().connected()}
@@ -57,6 +109,36 @@ def status():
     state['morning_digest']=get('morning_digest');state['config']=config();state['alerts']=get('alerts',[])[-30:]
     state['stale']=not state.get('completed_at') or (datetime.now(timezone.utc)-datetime.fromisoformat(state['completed_at'])).total_seconds()>4200
     return state
+
+
+def run_review(symbol):
+    try:
+        save('latest_review',{'symbol':symbol,'status':'Waiting for current scan','started_at':stamp()})
+        with lock:
+            save('latest_review',{'symbol':symbol,'status':'Reviewing','started_at':stamp()})
+            today=datetime.now(ZoneInfo('America/New_York')).date()
+            result=json_evidence(review_symbol(Data(),symbol,config(),today,get('valuation_models',{}).get(symbol)))
+            if symbol not in get('valuation_models',{}):save('automatic_valuation:'+symbol,{'checked_at':time.time(),'value':result.get('valuation',{'status':'unavailable','reason':'Review evidence unavailable'})})
+            save('review:'+symbol,result);save('latest_review',result)
+    except Exception as error:
+        save('latest_review',{'symbol':symbol,'status':'Unavailable','error':type(error).__name__+' · review failed'})
+    finally:review_lock.release()
+
+def tradingview_worker():
+    while True:
+        try:
+            pending=[e for e in get('tradingview_events',[]) if e['status']=='Pending review']
+            for event in pending:
+                if time.time()-event['received_at']>900:
+                    tradingview_alerts.update(conn,event['id'],{'status':'Expired — request a new review'});continue
+                if lock.locked() or not review_lock.acquire(False):break
+                run_review(event['symbol'])
+                review=get('review:'+event['symbol'],{})
+                latest=get('latest_review',{})
+                complete=latest.get('status')=='Completed' and review.get('completed_at')==latest.get('completed_at')
+                tradingview_alerts.update(conn,event['id'],{'status':'Reviewed' if complete else 'Review unavailable','reviewed_at':stamp(),'eligible_contract_count':review.get('eligible_contract_count',0) if complete else 0,'swing_eligible':bool(complete and review.get('swing_eligible'))})
+        except Exception:pass  # Retry persisted pending work; do not log webhook credentials.
+        time.sleep(2)
 
 def scan(morning=False):
     if not lock.acquire(False):return
@@ -169,6 +251,26 @@ def scan(morning=False):
             detail=next((d for d in state['diagnostics'] if d['symbol']==item['symbol']),None)
             if detail is not None:detail['display_metadata']=item['display_metadata']
         # Extra display requests must not extend the freshness of trade quotes.
+        state['status']='Loading automatic valuations';state['automatic_valuations']={};save('state',state)
+        auto_deadline=time.monotonic()+90
+        for item in state['rows']+state['watchlist']:
+            if item['symbol'] in get('valuation_models',{}):continue
+            key='automatic_valuation:'+item['symbol'];cached=get(key)
+            if cached and 0<=time.time()-cached['checked_at']<86400:
+                value=cached['value']
+            elif not os.getenv('SEC_USER_AGENT'):
+                value={'status':'unavailable','reason':'Configure SEC_USER_AGENT to enable automatic valuation inputs'}
+            elif time.monotonic()<auto_deadline:
+                try:
+                    raw=getattr(data,'_annual_reports',{}).get(item['symbol'],{})
+                    value=estimate_automatic(item['symbol'],raw.get('cik'),item['price'],today)
+                except SECDataError as error:
+                    value={'status':'unavailable','reason':str(error),'input_audit':error.details}
+                except Exception as error:
+                    value={'status':'unavailable','reason':type(error).__name__+' · automatic valuation evidence unavailable'}
+                save(key,{'checked_at':time.time(),'value':value})
+            else:value={'status':'unavailable','reason':'Automatic-data time budget reached; use Review or wait for a later scan'}
+            state['automatic_valuations'][item['symbol']]=value
         state['rows']=[r for r in state['rows'] if 0<=time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900
                        and (not r['put'] or 0<=time.time()-r['put']['quote_timestamp']<=900)]
         state['watchlist']=[w for w in state['watchlist'] if 0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900]
@@ -191,7 +293,7 @@ def scan(morning=False):
                 if (datetime.now(timezone.utc)-datetime.fromisoformat(row['quote_at'])).total_seconds()>900:continue
                 kinds=','.join(k for k in ('swing','put') if row[k]);key=str(today)+':'+row['symbol']+':'+kinds
                 if get('sent:'+key):continue
-                payload={'text':json.dumps({'message':'Qualified screen · review before trading','stock':row,'sources':['Tradier market data','Finnhub research'],'risks':'Earnings schedules can change; price gaps, assignment, concentration and liquidity risk.'},indent=2)}
+                payload={'text':json.dumps({'message':'Qualified screen · review before trading','stock':row,'sources':['Charles Schwab market data',row['quality'].get('source','Annual fundamentals'),'Finnhub earnings and research'],'risks':'Earnings schedules can change; price gaps, assignment, concentration and liquidity risk.'},indent=2)}
                 try:
                     response=requests.post(os.environ['ALERT_WEBHOOK_URL'],json=payload,timeout=15);response.raise_for_status()
                     save('sent:'+key,True);alerts=get('alerts',[]);alerts.append({'at':stamp(),'symbol':row['symbol'],'type':kinds});save('alerts',alerts[-200:])
@@ -272,9 +374,24 @@ class Handler(BaseHTTPRequestHandler):
             raw=(ROOT/'journal.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
+        if path in ('/review_ui.js','/confirmation_ui.js'):
+            raw=(ROOT/path[1:]).read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/':self.send_error(404);return
         raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a><a href="/diagnostics" style="margin:0 18px;color:inherit">Scan diagnostics</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
     def do_POST(self):
+        if self.path=='/api/tradingview/alert':
+            try:
+                n=int(self.headers.get('Content-Length','0'))
+                if not 0<n<=4096:raise tradingview_alerts.AlertError('Invalid alert size')
+                if self.headers.get('Content-Type','').split(';')[0].strip()!='application/json':raise tradingview_alerts.AlertError('Use a JSON alert message')
+                payload=json.loads(self.rfile.read(n))
+                universe={'XYZ' if s=='SQ' else s for s in config()['universe'].split()}
+                event=tradingview_alerts.validate_alert(payload,os.getenv('TRADINGVIEW_WEBHOOK_TOKEN',''),universe)
+                self.respond(tradingview_alerts.enqueue(conn,event),202)
+            except tradingview_alerts.AlertError as error:self.respond({'error':str(error)},error.code)
+            except (ValueError,TypeError):self.respond({'error':'Invalid alert JSON'},400)
+            except Exception:self.respond({'error':'Alert storage unavailable'},503)
+            return
         if self.path=='/api/broker/snapshot':
             token=os.getenv('BROKER_SYNC_TOKEN','')
             if len(token)<32 or not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token):
@@ -288,6 +405,36 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.auth():return
         if self.headers.get('X-Stockdesk')!='1':self.respond({'error':'Request rejected'},403);return
+        if self.path=='/api/review':
+            try:
+                import re
+                n=int(self.headers.get('Content-Length','0'))
+                if not 0<n<=1024:raise ValueError()
+                payload=json.loads(self.rfile.read(n))
+                if not isinstance(payload,dict) or set(payload)!={'symbol'}:raise ValueError()
+                symbol=payload['symbol']
+                if not isinstance(symbol,str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):raise ValueError()
+                if not review_lock.acquire(False):self.respond({'error':'Another stock review is in progress'},409);return
+                save('latest_review',{'symbol':symbol,'status':'Queued','started_at':stamp()})
+                try:threading.Thread(target=run_review,args=(symbol,),daemon=True).start()
+                except RuntimeError:
+                    review_lock.release();self.respond({'error':'Could not start stock review'},503);return
+                self.respond({'queued':True,'symbol':symbol})
+            except (ValueError,TypeError):self.respond({'error':'Use an uppercase dashboard stock symbol'},400)
+            return
+        if self.path=='/api/decision-preferences':
+            try:
+                n=int(self.headers.get('Content-Length','0'))
+                if not 0<n<=2048:raise ValueError()
+                prefs=json.loads(self.rfile.read(n))
+                if not isinstance(prefs,dict) or set(prefs)!={'total_cash','max_swing_loss','max_position_pct'}:raise ValueError()
+                import math
+                for key,value in prefs.items():
+                    if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<=0):raise ValueError()
+                if prefs['max_position_pct'] is not None and prefs['max_position_pct']>100:raise ValueError()
+                save('decision_preferences',prefs);self.respond({'ok':True})
+            except (ValueError,TypeError):self.respond({'error':'Use positive amounts; allocation cap must be at most 100%'},400)
+            return
         if self.path=='/api/valuation':
             try:
                 n=int(self.headers.get('Content-Length','0'))
@@ -341,6 +488,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_error(404)
 if __name__=='__main__':
+    threading.Thread(target=tradingview_worker,daemon=True).start()
     threading.Thread(target=live_import.worker,args=(conn,get,save,Schwab),daemon=True).start()
     threading.Thread(target=agent,daemon=True).start()
     ThreadingHTTPServer(('0.0.0.0',int(os.getenv('PORT','8000'))),Handler).serve_forever()

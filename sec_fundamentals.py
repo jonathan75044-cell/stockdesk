@@ -26,7 +26,7 @@ class SECDataError(ValueError):
 def fetch_json(path):
     """Fixed SEC host, identified requests, one request/second, one-hour cache."""
     global _last_request
-    if not re.fullmatch(r'(submissions|api/xbrl/companyfacts)/CIK\d{10}\.json',path):
+    if path!='company_tickers.json' and not re.fullmatch(r'(submissions|api/xbrl/companyfacts)/CIK\d{10}\.json',path):
         raise SECDataError('Unsupported SEC endpoint')
     agent=os.getenv('SEC_USER_AGENT','').strip()
     if not agent or '@' not in agent or '\n' in agent or '\r' in agent:
@@ -38,7 +38,8 @@ def fetch_json(path):
         time.sleep(max(0,1-(now-_last_request)))
         _last_request=time.monotonic()
         try:
-            request=Request('https://data.sec.gov/'+path,
+            endpoint='https://www.sec.gov/files/company_tickers.json' if path=='company_tickers.json' else 'https://data.sec.gov/'+path
+            request=Request(endpoint,
                             headers={'User-Agent':agent,'Accept':'application/json'})
             with urlopen(request,timeout=30) as response:
                 raw=response.read(25000001)

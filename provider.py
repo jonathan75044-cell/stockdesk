@@ -52,7 +52,10 @@ class Data:
     def quality(self,symbol,today=None):
         today=today or date.today()
         try:
-            return parse_annual_quality(self.fh('stock/financials-reported',symbol=symbol,freq='annual'),today)
+            payload=self.fh('stock/financials-reported',symbol=symbol,freq='annual')
+            if not hasattr(self,'_annual_reports'):self._annual_reports={}
+            self._annual_reports[symbol]=payload
+            return parse_annual_quality(payload,today)
         except (ValueError,requests.RequestException) as original:
             if symbol!='DE':raise
             from sec_fundamentals import load_annual_payload,SECDataError
@@ -76,6 +79,9 @@ class Data:
                 'retrieved_at':datetime.now(timezone.utc).isoformat(),'notes':[]}
         try:
             profile=self.fh('stock/profile',symbol=symbol)
+            if isinstance(profile,dict):
+                result['company_description']=profile.get('description')[:2000] if isinstance(profile.get('description'),str) else None
+                result['industry']=profile.get('gind') or profile.get('finnhubIndustry')
             sector=profile.get('gsector') if isinstance(profile,dict) else None
             if isinstance(sector,str) and sector.strip() and not sector.strip().isdigit():
                 result['sector']=sector.strip()[:100]

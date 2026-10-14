@@ -70,7 +70,8 @@ class Schwab:
         market=raw.get('equity',{}).get('EQ',{})
         regular=market.get('sessionHours',{}).get('regularMarket',[])
         opened=bool(market.get('isOpen')) and any(datetime.fromisoformat(p['start'])<=now<datetime.fromisoformat(p['end']) for p in regular)
-        return {'state':'open' if opened else 'closed'}
+        current_session=next((p for p in regular if datetime.fromisoformat(p['start'])<=now<datetime.fromisoformat(p['end'])),None)
+        return {'state':'open' if opened else 'closed','regular_session_end':current_session['end'] if opened and current_session else None}
     def quotes(self,symbols):
         raw=self.get('quotes',symbols=','.join(market_symbol(s) for s in symbols),fields='quote,reference')
         result=[]
@@ -87,6 +88,7 @@ class Schwab:
         for c in raw.get('candles',[]):
             d=datetime.fromtimestamp(c['datetime']/1000,NY).date()
             if d<today:rows.append({**c,'date':str(d)})
+        if len({row['date'] for row in rows})!=len(rows):raise ValueError('Schwab returned duplicate daily dates; history requires review')
         return sorted(rows,key=lambda c:c['date'])
     def options(self,symbol,today,cfg):
         raw=self.get('chains',symbol=market_symbol(symbol),contractType='PUT',strategy='SINGLE',includeUnderlyingQuote='true',fromDate=str(today+timedelta(days=cfg['put_dte_min'])),toDate=str(today+timedelta(days=cfg['put_dte_max'])))
@@ -95,7 +97,7 @@ class Schwab:
             for contracts in strikes.values():
                 for c in contracts:
                     if c.get('nonStandard') is not False:continue
-                    yield {'symbol':c.get('symbol'),'option_type':'put','contract_size':c.get('multiplier'),'strike':c.get('strikePrice'),'expiration_date':exp.split(':')[0],'bid':c.get('bid'),'ask':c.get('ask'),'greeks':{'delta':c.get('delta')},'open_interest':c.get('openInterest'),'bid_date':c.get('quoteTimeInLong'),'ask_date':c.get('quoteTimeInLong')}
+                    yield {'symbol':c.get('symbol'),'option_type':'put','contract_size':c.get('multiplier'),'strike':c.get('strikePrice'),'expiration_date':exp.split(':')[0],'bid':c.get('bid'),'ask':c.get('ask'),'greeks':{k:c.get(k) for k in ('delta','gamma','theta','vega','rho')},'open_interest':c.get('openInterest'),'volume':c.get('totalVolume'),'iv_pct':c.get('volatility'),'bid_date':c.get('quoteTimeInLong'),'ask_date':c.get('quoteTimeInLong')}
     def intraday(self,today):
         now=datetime.now(NY)
         return self.get('pricehistory',symbol='JD',periodType='day',frequencyType='minute',frequency=15,startDate=int(datetime.combine(today-timedelta(days=35),datetime.min.time(),NY).timestamp()*1000),endDate=int(now.timestamp()*1000),needExtendedHoursData='false').get('candles',[])
