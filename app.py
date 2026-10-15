@@ -13,7 +13,8 @@ import requests
 from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
-BUILD='confirmation-workspace-2026-10-13'
+from pullback import pullback_zone
+BUILD='swing-pullback-zones-2026-10-15'
 from valuation import validate_model,estimate
 from decision import review_symbol
 from auto_fcfe import estimate_automatic
@@ -34,16 +35,17 @@ def save(k,v):
 def config():
     defaults=json.loads((ROOT/'config.json').read_text())
     saved=get('config',{})
-    if get('rules_version')!=3:
+    if get('rules_version')!=4:
         # One-time migration of the requested filters; preserve universe, cash and notification preferences.
         keys=('put_delta_min','put_delta_max','put_otm_min','put_otm_max',
               'put_min_oi','put_max_spread_fraction','put_max_spread_dollars',
               'min_avg_volume','min_current_ratio','max_debt_equity','swing_min_rr')
-        saved.update({k:defaults[k] for k in keys})
-        save('config',saved);save('rules_version',3)
+        if get('rules_version')!=3:saved.update({k:defaults[k] for k in keys})
+        save('config',saved);save('rules_version',4)
         previous=get('state',{})
-        previous.update(status='Rules updated · awaiting fresh scan',rows=[],completed_at=None)
+        previous.update(status='Rules updated · awaiting fresh scan',rows=[],watchlist=[],golden_zones=[],completed_at=None)
         save('state',previous);save('morning_digest',None)
+        save('latest_review',None)
     return {**defaults,**saved}
 def stamp():return datetime.now(timezone.utc).isoformat()
 def json_evidence(value):
@@ -53,9 +55,11 @@ def json_evidence(value):
     if isinstance(value,(list,tuple)):return [json_evidence(v) for v in value]
     return value
 def status():
+    active_config=config()
     state=get('state',{'status':'Setup required','rows':[],'errors':[]})
     state['build']=BUILD
     state.setdefault('watchlist',[])
+    state.setdefault('golden_zones',[])
     models=get('valuation_models',{})
     state['valuation_models']=models
     state['latest_review']=get('latest_review')
@@ -106,7 +110,7 @@ def status():
     state['market_data_source']='Charles Schwab'
     state['schwab']={'configured':Schwab().configured(),'connected':Schwab().connected()}
     state['notification_configured']=bool(os.getenv('ALERT_WEBHOOK_URL'))
-    state['morning_digest']=get('morning_digest');state['config']=config();state['alerts']=get('alerts',[])[-30:]
+    state['morning_digest']=get('morning_digest');state['config']=active_config;state['alerts']=get('alerts',[])[-30:]
     state['stale']=not state.get('completed_at') or (datetime.now(timezone.utc)-datetime.fromisoformat(state['completed_at'])).total_seconds()>4200
     return state
 
@@ -150,7 +154,7 @@ def scan(morning=False):
             s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);return
         today=datetime.now(ZoneInfo('America/New_York')).date()
         symbols=list(dict.fromkeys('XYZ' if x.upper()=='SQ' else x.upper() for x in cfg['universe'].split()))
-        state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'scan_build':BUILD,'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
+        state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'golden_zones':[],'scan_build':BUILD,'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
         for symbol in symbols:
             detail={'symbol':symbol,'outcome':'Processing','stage':'Quote'}
             state['diagnostics'].append(detail)
@@ -161,6 +165,10 @@ def scan(morning=False):
                 detail['stage']='Daily history'
                 price=float(q['last']);days=data.days(symbol,today);m=indicators(days)
                 if not days or (today-datetime.fromisoformat(days[-1]['date']).date()).days>5: raise ValueError('Daily history stale')
+                pullback=pullback_zone(price,days,m['atr'])
+                detail['pullback']=pullback
+                if pullback and pullback['in_zone']:
+                    state['golden_zones'].append(dict(symbol=symbol,name=q.get('description',symbol),price=price,quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat(),**pullback))
                 if price<cfg['min_price']:
                     detail['outcome']='Below minimum price';continue
                 if m['avgvol']<cfg['min_avg_volume']:
@@ -374,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             raw=(ROOT/'journal.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
-        if path in ('/review_ui.js','/confirmation_ui.js'):
+        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js'):
             raw=(ROOT/path[1:]).read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/':self.send_error(404);return
         raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a><a href="/diagnostics" style="margin:0 18px;color:inherit">Scan diagnostics</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
