@@ -3,6 +3,7 @@ import math
 import time
 from datetime import datetime,timezone,timedelta
 from engine import indicators,demand_zone,swing,put_candidate,fundamental_gate
+from pullback import pullback_zone
 from valuation import estimate
 from sec_fundamentals import SECDataError
 
@@ -103,6 +104,7 @@ def review_symbol(data,symbol,cfg,today,model=None):
         try:history_pass=0<(today-datetime.fromisoformat(days[-1]['date']).date()).days<=5
         except (KeyError,ValueError,TypeError):pass
         report['market_metrics']=m
+        report['pullback']=call('Swing anchors',lambda:pullback_zone(price,days,m['atr']))
         report['daily_closes']=[{'date':b['date'],'close':number(b['close'])} for b in days[-120:]]
         report['high_52w']=max(float(b['high']) for b in days[-252:]) if len(days)>=252 else None
         report['low_52w']=min(float(b['low']) for b in days[-252:]) if len(days)>=252 else None

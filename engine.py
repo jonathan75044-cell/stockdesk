@@ -1,4 +1,5 @@
 import math
+from pullback import pullback_zone
 from datetime import date, datetime, timezone
 
 def indicators(days):
@@ -26,19 +27,23 @@ def swing(price,days,cfg,reasons=None):
         return None
     m=indicators(days)
     if not (price>=cfg['min_price'] and m['avgvol']>=cfg['min_avg_volume']): return reject('Price or average volume')
-    if not(price>m['ma20']>m['ma50'] and price<=m['ma20']+2*m['atr'] and m['rvol']>=cfg['swing_min_rvol']): return reject('Trend, MA distance or relative volume')
-    # Completed daily breakout; current price must still hold that level.
-    breakout=max(float(d['high']) for d in days[-21:-1])
-    if min(price,float(days[-1]['close']))<=breakout: return reject('No completed breakout')
+    zone=pullback_zone(price,days,m['atr'])
+    if not zone or not zone['in_zone']:return reject('Outside 38.2%–61.8% verified swing pullback or anchors unavailable')
+    if not(m['ma20']>m['ma50'] and m['rvol']>=cfg['swing_min_rvol']):return reject('Uptrend or completed-day relative volume')
+    last,prev=days[-1],days[-2]
+    if 'open' not in last or not(float(last['close'])>float(last['open']) and float(last['close'])>float(prev['high']) and price>float(prev['high'])):
+        return reject('No completed bullish reversal and current-price hold')
+    if min(float(d['low']) for d in days[-3:])<zone['zone_low']-.5*m['atr']:return reject('Pullback support breached')
     stop=min(float(d['low']) for d in days[-5:])-.1*m['atr']
     risk=price-stop
     if risk<=0 or risk>2*m['atr']: return reject('Stop risk outside limits')
-    resistance=sorted(set(float(d['high']) for d in days[:-21] if float(d['high'])>price))
+    resistance=sorted(set(float(d['high']) for d in days[:-2] if float(d['high'])>price))
     # Targets are actual historical resistance, never manufactured to meet R/R.
     if len(resistance)<2: return reject('Insufficient historical targets')
     t1=resistance[0];t2=next((v for v in resistance if v>=t1+.5*m['atr']),None)
     if t2 is None or (t1-price)/risk<cfg['swing_min_rr'] or t1-price>4*m['atr']: return reject('Target spacing or reward/risk')
-    return dict(entry=price,stop=round(stop,2),target1=t1,target2=t2,rr=round((t1-price)/risk,2),rvol=round(m['rvol'],2),ma20=round(m['ma20'],2),score=round(min(100,50+10*(t1-price)/risk+5*m['rvol']),1),risk='Gaps can exceed the stop. Resistance may not be reached within 5–10 sessions.')
+    zone['entry_confirmed']=True
+    return dict(entry=price,stop=round(stop,2),target1=t1,target2=t2,rr=round((t1-price)/risk,2),rvol=round(m['rvol'],2),ma20=round(m['ma20'],2),score=round(min(100,50+10*(t1-price)/risk+5*m['rvol']),1),pullback=zone,risk='Gaps can exceed the stop. Resistance may not be reached within several days to a few weeks.')
 
 def put_candidate(price,option,cfg,today,zone=None,reasons=None):
     def reject(reason):
