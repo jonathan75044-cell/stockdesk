@@ -29,7 +29,13 @@ def swing(price,days,cfg,reasons=None):
     if not (price>=cfg['min_price'] and m['avgvol']>=cfg['min_avg_volume']): return reject('Price or average volume')
     zone=pullback_zone(price,days,m['atr'])
     if not zone or not zone['in_zone']:return reject('Outside 38.2%–61.8% verified swing pullback or anchors unavailable')
-    if not(m['ma20']>m['ma50'] and m['rvol']>=cfg['swing_min_rvol']):return reject('Uptrend or completed-day relative volume')
+    trend_failed=not m['ma20']>m['ma50']
+    volume_failed=not m['rvol']>=cfg['swing_min_rvol']
+    if trend_failed:
+        reject(f"Uptrend failed: 20-day average ${m['ma20']:.4f} must exceed 50-day average ${m['ma50']:.4f}")
+    if volume_failed:
+        reject(f"Completed-day relative volume failed: {m['rvol']:.4f}x; minimum {cfg['swing_min_rvol']:.4f}x (latest volume {float(days[-1]['volume']):,.0f} / prior 20-day average {m['avgvol']:,.0f})")
+    if trend_failed or volume_failed:return None
     last,prev=days[-1],days[-2]
     if 'open' not in last or not(float(last['close'])>float(last['open']) and float(last['close'])>float(prev['high']) and price>float(prev['high'])):
         return reject('No completed bullish reversal and current-price hold')
