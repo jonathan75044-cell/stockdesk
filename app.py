@@ -14,7 +14,7 @@ from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='scan-feedback-2026-10-15'
+BUILD='after-hours-research-2026-10-15'
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
@@ -162,16 +162,14 @@ def request_scan():
         data=Data()
         if not data.token or not data.finn:
             return {'queued':False,'message':'Connect Schwab and configure Finnhub before scanning.'},409
-        if data.clock()['state']!='open':
-            logger.info('Manual scan skipped: regular market closed')
-            return {'queued':False,'message':'Market closed. Live scans run during regular U.S. market hours. No new scan was started; previous results remain unchanged.'},409
+        research=data.clock()['state']!='open'
         threading.Thread(target=scan,kwargs={'lock_owned':True},daemon=True).start()
         worker_started=True
     except Exception as error:
         logger.error('Manual scan request failed (%s)',type(error).__name__)
         return {'queued':False,'message':'Unable to start scan. Check data connection and server logs.'},503
     else:
-        return {'queued':True,'message':'Scan started.'},202
+        return {'queued':True,'message':'After-hours research started. Closing prices only; live entry checks remain pending.' if research else 'Live scan started.'},202
     finally:
         # The worker owns the reservation only after a successful start.
         if not worker_started:lock.release()
@@ -182,26 +180,34 @@ def scan(morning=False,lock_owned=False):
         cfg=config();data=Data()
         if not data.token or not data.finn:
             save('state',{'status':'Setup required · connect Schwab and configure Finnhub','rows':[],'errors':[]});return
-        if data.clock()['state']!='open':
-            s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);logger.info('Scan skipped: regular market closed');return
+        market=data.clock();research_mode=market['state']!='open'
         today=datetime.now(ZoneInfo('America/New_York')).date()
         symbols=list(dict.fromkeys('XYZ' if x.upper()=='SQ' else x.upper() for x in cfg['universe'].split()))
-        state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'golden_zones':[],'scan_build':BUILD,'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
+        state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'golden_zones':[],'scan_build':BUILD,'research_only':research_mode,'data_dates':[],'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
         logger.info('Scan started: %s symbols',len(symbols))
         for symbol in symbols:
             detail={'symbol':symbol,'outcome':'Processing','stage':'Quote'}
             state['diagnostics'].append(detail)
             try:
-                q=data.quotes([symbol])[0]
-                ts=float(q['trade_date'])/1000
-                if abs(time.time()-ts)>900:raise ValueError('Stale underlying quote')
                 detail['stage']='Daily history'
-                price=float(q['last']);days=data.days(symbol,today);m=indicators(days)
-                if not days or (today-datetime.fromisoformat(days[-1]['date']).date()).days>5: raise ValueError('Daily history stale')
+                cutoff=today+timedelta(days=1) if research_mode and market.get('completed_today') else today
+                days=data.days(symbol,cutoff)
+                if not days or not 0<=(today-datetime.fromisoformat(days[-1]['date']).date()).days<=5:raise ValueError('Daily history stale')
+                if research_mode:
+                    price=float(days[-1]['close'])
+                    if not math.isfinite(price) or price<=0:raise ValueError('Invalid closing price')
+                    ts=datetime.fromisoformat(days[-1]['date']).replace(tzinfo=ZoneInfo('America/New_York')).timestamp()
+                    q={'description':symbol,'volume':days[-1]['volume']}
+                    if days[-1]['date'] not in state['data_dates']:state['data_dates'].append(days[-1]['date'])
+                else:
+                    q=data.quotes([symbol])[0];ts=float(q['trade_date'])/1000
+                    if abs(time.time()-ts)>900:raise ValueError('Stale underlying quote')
+                    price=float(q['last'])
+                m=indicators(days)
                 pullback=pullback_zone(price,days,m['atr'])
                 detail['pullback']=pullback
                 if pullback and pullback['in_zone']:
-                    state['golden_zones'].append(dict(symbol=symbol,name=q.get('description',symbol),price=price,quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat(),**pullback))
+                    state['golden_zones'].append(dict(symbol=symbol,name=q.get('description',symbol),price=price,research_only=research_mode,data_date=days[-1]['date'],quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat(),**pullback))
                 if price<cfg['min_price']:
                     detail['outcome']='Below minimum price';continue
                 if m['avgvol']<cfg['min_avg_volume']:
@@ -220,7 +226,7 @@ def scan(morning=False,lock_owned=False):
                 if not zone:
                     watch=demand_watch_candidate(detail['demand_diagnostics'])
                     if watch:
-                        watch.update(symbol=symbol,name=q.get('description',symbol),price=price,
+                        watch.update(symbol=symbol,name=q.get('description',symbol),price=price,research_only=research_mode,data_date=days[-1]['date'],
                                      quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat())
                         state['watchlist'].append(watch)
                         detail['watchlist']=watch
@@ -242,7 +248,7 @@ def scan(morning=False,lock_owned=False):
                 detail['put_rejections']={}
                 puts=[];detail['contracts_checked']=0
                 detail['put_trend_passed']=price>m['ma20']>m['ma50']
-                if zone and price>m['ma20']>m['ma50']:
+                if not research_mode and zone and price>m['ma20']>m['ma50']:
                     for opt in data.options(symbol,today,cfg):
                         reasons=[];detail['contracts_checked']+=1
                         candidate=put_candidate(price,opt,cfg,today,zone,reasons)
@@ -256,7 +262,7 @@ def scan(morning=False,lock_owned=False):
                 if not(sw or puts):
                     detail['outcome']='Earnings exclusion';continue
                 best=max(puts,key=lambda c:c['score']) if puts else None
-                row={'quality':quality,'demand_zone':zone,'symbol':symbol,'name':q.get('description',symbol),'price':price,'volume':q.get('volume'),'quote_at':datetime.fromtimestamp(ts,timezone.utc).isoformat(),'swing':sw,'put':best,'score':max(sw['score'] if sw else 0,best['score'] if best else 0),'research':research,'ma20':m['ma20'],'ma50':m['ma50'],'asof':stamp(),'earnings_note':'No scheduled event returned in the screened horizon; calendar may change.'}
+                row={'research_only':research_mode,'data_date':days[-1]['date'],'market_ready':not research_mode,'quality':quality,'demand_zone':zone,'symbol':symbol,'name':q.get('description',symbol),'price':price,'volume':q.get('volume'),'quote_at':datetime.fromtimestamp(ts,timezone.utc).isoformat(),'swing':sw,'put':best,'score':max(sw['score'] if sw else 0,best['score'] if best else 0),'research':research,'ma20':m['ma20'],'ma50':m['ma50'],'asof':stamp(),'earnings_note':'No scheduled event returned in the screened horizon; calendar may change.'}
                 state['rows'].append(row);detail['outcome']='Qualified before final freshness and result limit'
             except Exception as e:
                 detail['outcome']='Data or processing error'
@@ -275,16 +281,16 @@ def scan(morning=False,lock_owned=False):
                 # Do not expose URLs containing API keys.
                 state['errors'].append({'symbol':symbol,'stage':detail['stage'],'reason':detail.get('error',type(e).__name__+' · data unavailable')})
             finally:
-                detail['swing_stage']='Meets trade checks' if any(r['symbol']==symbol and r.get('swing') for r in state['rows']) else 'Awaiting confirmation' if detail.get('pullback',{} ) and detail['pullback'].get('in_zone') else 'Outside zone / unverified'
+                detail['swing_stage']=('Research candidate · live checks pending' if research_mode else 'Meets trade checks') if any(r['symbol']==symbol and r.get('swing') for r in state['rows']) else 'Awaiting confirmation' if detail.get('pullback',{} ) and detail['pullback'].get('in_zone') else 'Outside zone / unverified'
                 detail['swing_blockers']=detail.get('swing_rejections',[])+detail.get('fundamental_rejections',[])
                 if detail['outcome']!='Qualified before final freshness and result limit':detail['swing_blockers'].append(detail['outcome'])
                 for item in state['golden_zones']:
                     if item['symbol']==symbol:item.update(swing_stage=detail['swing_stage'],swing_blockers=detail['swing_blockers'],legacy_demand_confirmed=detail.get('put_demand_pass',False),volume_comparison=detail.get('volume_comparison',{}))
                 state['scanned']+=1;save('state',state)
-        state['rows']=[r for r in state['rows'] if time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900 and (not r['put'] or time.time()-r['put']['quote_timestamp']<=900)]
+        state['rows']=[r for r in state['rows'] if research_mode or (0<=time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900 and (not r['put'] or 0<=time.time()-r['put']['quote_timestamp']<=900))]
         state['rows']=sorted(state['rows'],key=lambda x:x['score'],reverse=True)[:cfg['max_results']]
         state['watchlist']=sorted([w for w in state['watchlist'] if
-            0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900],
+            research_mode or 0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900],
             key=lambda w:(w['distance_atr'],w['symbol']))[:cfg['max_results']]
         # Enrich displayed tables only; these fields are never screening gates.
         state['status']='Loading table metadata';save('state',state)
@@ -323,19 +329,19 @@ def scan(morning=False,lock_owned=False):
                 save(key,{'checked_at':time.time(),'value':value})
             else:value={'status':'unavailable','reason':'Automatic-data time budget reached; use Review or wait for a later scan'}
             state['automatic_valuations'][item['symbol']]=value
-        state['rows']=[r for r in state['rows'] if 0<=time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900
-                       and (not r['put'] or 0<=time.time()-r['put']['quote_timestamp']<=900)]
-        state['watchlist']=[w for w in state['watchlist'] if 0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900]
+        state['rows']=[r for r in state['rows'] if research_mode or (0<=time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900
+                       and (not r['put'] or 0<=time.time()-r['put']['quote_timestamp']<=900))]
+        state['watchlist']=[w for w in state['watchlist'] if research_mode or 0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900]
         selected={r['symbol'] for r in state['rows']}
         for detail in state['diagnostics']:
             if detail['outcome']=='Qualified before final freshness and result limit':
                 detail['outcome']='Displayed' if detail['symbol'] in selected else 'Final freshness or result limit exclusion'
-        state['status']='Monitoring';state['completed_at']=stamp();save('state',state)
+        state['status']='After-hours research complete · live checks pending' if research_mode else 'Monitoring';state['completed_at']=stamp();save('state',state)
         logger.info('Scan completed: %s/%s processed, %s results, %s watchlist entries, %s errors',state['scanned'],state['total'],len(state['rows']),len(state['watchlist']),len(state['errors']))
-        if morning:
+        if morning and not research_mode:
             digest={'date':str(today),'completed_at':stamp(),'rows':state['rows'],'errors':state['errors'],'note':'Qualified at scan time; recheck live quotes before acting.'}
             save('morning_digest',digest);save('morning_done',str(today))
-        if cfg['notifications_enabled'] and os.getenv('ALERT_WEBHOOK_URL') and data.clock()['state']=='open':
+        if not research_mode and cfg['notifications_enabled'] and os.getenv('ALERT_WEBHOOK_URL') and data.clock()['state']=='open':
             if morning and state['rows'] and get('morning_sent')!=str(today):
                 try:
                     brief=[{'symbol':r['symbol'],'price':r['price'],'put':r['put'],'swing':r['swing'],'demand_zone':r['demand_zone']} for r in state['rows']]

@@ -1,5 +1,6 @@
 // These labels describe recorded evidence; they never change scanner eligibility.
 function confirmationStatus(item,{watch=false,stale=false,review=false}={}){
+    if(item.research_only)return 'Research candidate · closing data '+(item.data_date||'')+' · live checks pending';
     if(stale||item.stale||item.market_ready===false)return 'Fresh review required';
     if(review&&item.status!=='Completed')return 'Checks pending';
     if(watch)return 'Awaiting confirmation';

@@ -71,7 +71,7 @@ class Schwab:
         regular=market.get('sessionHours',{}).get('regularMarket',[])
         opened=bool(market.get('isOpen')) and any(datetime.fromisoformat(p['start'])<=now<datetime.fromisoformat(p['end']) for p in regular)
         current_session=next((p for p in regular if datetime.fromisoformat(p['start'])<=now<datetime.fromisoformat(p['end'])),None)
-        return {'state':'open' if opened else 'closed','regular_session_end':current_session['end'] if opened and current_session else None}
+        return {'state':'open' if opened else 'closed','regular_session_end':current_session['end'] if opened and current_session else None,'completed_today':any(datetime.fromisoformat(p['end'])<=now for p in regular)}
     def quotes(self,symbols):
         raw=self.get('quotes',symbols=','.join(market_symbol(s) for s in symbols),fields='quote,reference')
         result=[]
