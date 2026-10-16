@@ -382,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             raw=(ROOT/'journal.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
-        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js'):
+        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js','/put_display.js'):
             raw=(ROOT/path[1:]).read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/':self.send_error(404);return
         raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a><a href="/diagnostics" style="margin:0 18px;color:inherit">Scan diagnostics</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)

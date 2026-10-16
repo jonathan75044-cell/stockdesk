@@ -67,7 +67,7 @@ def option_review(price,opt,cfg,today,zone,base_passed,earnings):
                                         'profit_before_fees':put_payoff(strike,bid,price*(1+change/100))}
                                        for change in (0,-5,-10,-20,-50,-100)]}
     eligible=bool(candidate and base_passed and event_pass and all(c['status']=='pass' for c in checks))
-    return {'contract':opt.get('symbol'),'expiry':opt.get('expiration_date'),'strike':strike,'bid':bid,'ask':ask,
+    return {'contract':opt.get('symbol'),'expiry':opt.get('expiration_date'),'dte':dte,'strike':strike,'bid':bid,'ask':ask,
             'quote_timestamp':min(quote_times)/1000 if all(t is not None for t in quote_times) else None,
             'delta':delta,'oi':oi,'volume':number(opt.get('volume')),'iv_pct':number(opt.get('iv_pct')),
             'greeks':{k:number((opt.get('greeks') or {}).get(k)) for k in ('gamma','theta','vega','rho')},
