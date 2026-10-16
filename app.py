@@ -14,7 +14,7 @@ from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='swing-pullback-zones-2026-10-15'
+BUILD='independent-swing-checks-2026-10-15'
 from valuation import validate_model,estimate
 from decision import review_symbol
 from auto_fcfe import estimate_automatic
@@ -35,13 +35,13 @@ def save(k,v):
 def config():
     defaults=json.loads((ROOT/'config.json').read_text())
     saved=get('config',{})
-    if get('rules_version')!=4:
+    if get('rules_version')!=5:
         # One-time migration of the requested filters; preserve universe, cash and notification preferences.
         keys=('put_delta_min','put_delta_max','put_otm_min','put_otm_max',
               'put_min_oi','put_max_spread_fraction','put_max_spread_dollars',
               'min_avg_volume','min_current_ratio','max_debt_equity','swing_min_rr')
-        if get('rules_version')!=3:saved.update({k:defaults[k] for k in keys})
-        save('config',saved);save('rules_version',4)
+        if get('rules_version') not in (3,4):saved.update({k:defaults[k] for k in keys})
+        save('config',saved);save('rules_version',5)
         previous=get('state',{})
         previous.update(status='Rules updated · awaiting fresh scan',rows=[],watchlist=[],golden_zones=[],completed_at=None)
         save('state',previous);save('morning_digest',None)
@@ -177,6 +177,12 @@ def scan(morning=False):
                 detail['demand_rejections']=[]
                 detail['demand_diagnostics']={}
                 zone=demand_zone(price,days,cfg,detail['demand_rejections'],detail['demand_diagnostics'])
+                detail['put_demand_pass']=bool(zone)
+                detail['swing_rejections']=[]
+                sw=swing(price,days,cfg,detail['swing_rejections'])
+                detail['swing_technical_pass']=bool(sw)
+                detail['legacy_swing_technical_pass']=bool(sw and zone)
+                detail['volume_comparison']={str(v):bool(swing(price,days,{**cfg,'swing_min_rvol':v})) for v in (1.0,1.1,1.3)}
                 detail['market_metrics']={'price':price,**m,'last_daily_bar':days[-1]['date']}
                 if not zone:
                     watch=demand_watch_candidate(detail['demand_diagnostics'])
@@ -185,7 +191,8 @@ def scan(morning=False):
                                      quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat())
                         state['watchlist'].append(watch)
                         detail['watchlist']=watch
-                    detail['outcome']='No confirmed demand zone';continue
+                    if not sw:
+                        detail['outcome']='Swing confirmation blocked; put demand unconfirmed';continue
                 detail['stage']='Finnhub research'
                 research=data.research(symbol,today,cfg['put_dte_max']+cfg['earnings_buffer_days'])
                 detail['fundamental_source']=research.get('quality',{}).get('source')
@@ -199,11 +206,10 @@ def scan(morning=False):
                 if not quality:
                     detail['outcome']='Fundamentals failed or missing';detail['fundamentals']=research.get('quality',{});continue
                 detail['stage']='Swing and options'
-                detail['swing_rejections']=[];detail['put_rejections']={}
-                sw=swing(price,days,cfg,detail['swing_rejections'])
+                detail['put_rejections']={}
                 puts=[];detail['contracts_checked']=0
                 detail['put_trend_passed']=price>m['ma20']>m['ma50']
-                if price>m['ma20']>m['ma50']:
+                if zone and price>m['ma20']>m['ma50']:
                     for opt in data.options(symbol,today,cfg):
                         reasons=[];detail['contracts_checked']+=1
                         candidate=put_candidate(price,opt,cfg,today,zone,reasons)
@@ -236,6 +242,11 @@ def scan(morning=False):
                 # Do not expose URLs containing API keys.
                 state['errors'].append({'symbol':symbol,'stage':detail['stage'],'reason':detail.get('error',type(e).__name__+' · data unavailable')})
             finally:
+                detail['swing_stage']='Meets trade checks' if any(r['symbol']==symbol and r.get('swing') for r in state['rows']) else 'Awaiting confirmation' if detail.get('pullback',{} ) and detail['pullback'].get('in_zone') else 'Outside zone / unverified'
+                detail['swing_blockers']=detail.get('swing_rejections',[])+detail.get('fundamental_rejections',[])
+                if detail['outcome']!='Qualified before final freshness and result limit':detail['swing_blockers'].append(detail['outcome'])
+                for item in state['golden_zones']:
+                    if item['symbol']==symbol:item.update(swing_stage=detail['swing_stage'],swing_blockers=detail['swing_blockers'],legacy_demand_confirmed=detail.get('put_demand_pass',False),volume_comparison=detail.get('volume_comparison',{}))
                 state['scanned']+=1;save('state',state)
         state['rows']=[r for r in state['rows'] if time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900 and (not r['put'] or time.time()-r['put']['quote_timestamp']<=900)]
         state['rows']=sorted(state['rows'],key=lambda x:x['score'],reverse=True)[:cfg['max_results']]
@@ -382,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
             raw=(ROOT/'journal.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
-        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js','/put_display.js'):
+        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js','/put_display.js','/strategy_summary.js'):
             raw=(ROOT/path[1:]).read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/':self.send_error(404);return
         raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a><a href="/diagnostics" style="margin:0 18px;color:inherit">Scan diagnostics</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)
