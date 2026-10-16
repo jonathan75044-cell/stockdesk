@@ -1,0 +1,11 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('put_display.js','utf8');new vm.Script(source);
+const helpers=source.slice(0,source.indexOf('const putDisplayColumns'));
+const c=vm.createContext({});vm.runInContext(helpers,c);
+const m=vm.runInContext('putDisplayMetrics({bid:1,ask:1.2,strike:100,dte:28})',c);
+assert.equal(m.midpoint,1.1);assert.equal(m.periodYield,1);assert.equal(m.weeklyYield,.25);
+for(const value of ['0','null','-1'])assert.equal(vm.runInContext(`putDisplayMetrics({bid:1,ask:1.2,strike:100,dte:${value}}).weeklyYield`,c),null);
+assert.equal(vm.runInContext('putDisplayMetrics({bid:2,ask:1,strike:100,dte:28}).periodYield',c),null);
+assert.equal(vm.runInContext('putDisplayMetrics(null).weeklyYield',c),null);
+assert.equal(vm.runInContext('putQuoteLabel(null)',c),'Unavailable');
+console.log('PASS: midpoint, bid-based yields, invalid/missing DTE, crossed quotes and browser syntax');
