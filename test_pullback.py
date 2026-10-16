@@ -28,7 +28,9 @@ class PullbackTests(unittest.TestCase):
     def test_entry_requires_reversal_and_real_reward_risk(self):
         from engine import swing
         days=[dict(open=170,close=170,high=180,low=165,volume=2000000) for _ in range(70)]
-        days[10]['high']=190
+        for i,b in enumerate(days):b['date']=str(date(2026,1,1)+timedelta(days=i))
+        days[20]['high']=185
+        days[10]['high']=195
         days[-3].update(low=147,high=149,close=149,open=148)
         days[-2].update(low=147,high=149,close=148,open=148)
         days[-1].update(low=148,high=152,close=151,open=149)

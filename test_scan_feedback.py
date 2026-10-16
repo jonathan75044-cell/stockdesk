@@ -8,7 +8,7 @@ class ScanFeedback(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.db=patch.object(app,'DB',Path(self.temp.name)/'test.db');self.db.start()
         self.lock=patch.object(app,'lock',threading.Lock());self.lock.start()
-        app.save('rules_version',5);app.save('scan_state_version',1)
+        app.save('rules_version',5);app.save('scan_state_version',1);app.save('resistance_rules_version',1)
     def tearDown(self):
         self.lock.stop();self.db.stop();self.temp.cleanup()
     def test_closed_starts_research_and_preserves_results_until_worker_runs(self):

@@ -1,5 +1,6 @@
 """Conditional watchlist plans. Never changes trade eligibility or submits orders."""
 import math
+from resistance import resistance_levels
 
 
 def swing_entry_plan(price,days,metrics,zone,cfg):
@@ -12,9 +13,9 @@ def swing_entry_plan(price,days,metrics,zone,cfg):
     entry=ceil_cent(max(price,threshold+.01))
     stop=floor_cent(min(float(b['low']) for b in days[-5:])-.1*atr)
     risk=entry-stop
-    resistance=sorted(set(float(b['high']) for b in days[:-2] if float(b['high'])>entry))
-    t1=resistance[0] if resistance else None
-    t2=next((v for v in resistance if t1 is not None and v>=t1+.5*atr),None)
+    evidence=resistance_levels(days,entry,atr)
+    t1=evidence['target1']['price'] if evidence['target1'] else None
+    t2=evidence['target2']['price'] if evidence['target2'] else None
     minimum_rr=float(cfg['swing_min_rr'])
     rr=(t1-entry)/risk if t1 is not None and risk>0 else None
     max_entry=floor_cent((t1+minimum_rr*stop)/(1+minimum_rr)) if t1 is not None and stop>0 else None
@@ -28,11 +29,11 @@ def swing_entry_plan(price,days,metrics,zone,cfg):
         ('Planning entry inside pullback zone',zone['zone_low']<=entry<=zone['zone_high']),
         ('Pullback support intact',min(float(b['low']) for b in days[-3:])>=zone['zone_low']-.5*atr),
         ('Positive stop and risk no greater than 2 ATR',stop>0 and 0<risk<=2*atr),
-        ('Two historical resistance targets',t1 is not None and t2 is not None),
+        ('Two confirmed swing-high targets',t1 is not None and t2 is not None),
         ('First-target reward/risk meets minimum',rr is not None and rr>=minimum_rr),
         ('First target within 4 ATR',t1 is not None and 0<t1-entry<=4*atr),
     ]
-    return {'status':'Conditional research plan','data_date':days[-1]['date'],
+    return {'resistance':evidence,'status':'Conditional research plan','data_date':days[-1]['date'],
             'entry':entry,'stop':stop if stop>0 else None,'target1':t1,'target2':t2,
             'risk_per_share':round(risk,4) if stop>0 and risk>0 else None,
             'reward_risk':round(rr,4) if rr is not None else None,'minimum_rr':minimum_rr,
@@ -43,6 +44,6 @@ def swing_entry_plan(price,days,metrics,zone,cfg):
             'average_volume':round(metrics['avgvol']),'minimum_average_volume':cfg['min_avg_volume'],
             'relative_volume':round(metrics['rvol'],3),'minimum_relative_volume':cfg['swing_min_rvol'],
             'financial_status':'Not evaluated','earnings_status':'Not evaluated',
-            'method':'Planning entry: higher of snapshot price or confirmation threshold plus $0.01, rounded up. Stop: lowest of five completed daily lows minus 0.1 ATR, rounded down. Targets: historical highs before the last two bars; second at least 0.5 ATR above first.',
+            'method':'Planning entry: higher of snapshot price or confirmation threshold plus $0.01, rounded up. Stop: lowest of five completed daily lows minus 0.1 ATR, rounded down. Targets: confirmed 2-left/2-right swing highs within 90 completed bars; nearest above entry first, second at least 0.5 ATR higher. Nearby daily highs remain overhead obstacles.',
             'invalidation':'Rebuild after a new daily bar, a support break, or a price gap. Skip if first-target reward/risk is below the configured minimum. Stops can fill below the planned level.',
             'eligible':False}

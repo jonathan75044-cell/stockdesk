@@ -3,7 +3,7 @@
   "max_results": 50,
   "cash_per_position": 10000,
   "min_price": 10,
-  "min_avg_volume": 1000000,
+  "min_avg_volume": 5000000,
   "put_dte_min": 21,
   "put_dte_max": 45,
   "put_delta_min": 0.2,

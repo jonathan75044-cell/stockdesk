@@ -3,7 +3,10 @@ from entry_plan import swing_entry_plan
 
 class EntryPlanTests(unittest.TestCase):
     def setUp(self):
-        self.days=[dict(date='2026-10-01',open=100,high=120,low=99,close=110,volume=6000000) for _ in range(70)]
+        self.days=[dict(date='2026-10-01',open=100,high=115,low=99,close=110,volume=6000000) for _ in range(70)]
+        from datetime import date,timedelta
+        for i,b in enumerate(self.days):b['date']=str(date(2026,8,7)+timedelta(days=i))
+        self.days[20]['high']=120
         self.days[10]['high']=130
         for b in self.days[-5:]:b.update(open=102,high=106,low=100,close=103)
         self.days[-2].update(high=104,close=103)
