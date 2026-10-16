@@ -69,10 +69,14 @@ class AfterHoursScan(ScanFeedback):
         self.assertFalse(state['rows'][0]['market_ready']);self.assertIsNone(state['rows'][0]['put'])
         self.assertEqual(state['data_dates'],[state['rows'][0]['data_date']])
         data.quotes.assert_not_called();data.options.assert_not_called()
-        data.days.assert_called_once_with('TEST',today+app.timedelta(days=1))
+        data.days.assert_any_call('TEST',today+app.timedelta(days=1))
+        data.days.assert_any_call('SPY',today+app.timedelta(days=1))
+        data.days.assert_any_call('QQQ',today+app.timedelta(days=1))
     def test_preopen_excludes_current_day(self):
         state,data,today=self.run_scan(completed=False,age=1)
-        data.days.assert_called_once_with('TEST',today)
+        data.days.assert_any_call('TEST',today)
+        data.days.assert_any_call('SPY',today)
+        data.days.assert_any_call('QQQ',today)
     def test_old_history_is_rejected(self):
         state,data,today=self.run_scan(age=6)
         self.assertEqual(state['rows'],[]);self.assertIn('stale',state['errors'][0]['reason'])
