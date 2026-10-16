@@ -91,8 +91,22 @@ class Schwab:
         for c in raw.get('candles',[]):
             d=datetime.fromtimestamp(c['datetime']/1000,NY).date()
             if d<today:rows.append({**c,'date':str(d)})
-        if len({row['date'] for row in rows})!=len(rows):raise ValueError('Schwab returned duplicate daily dates; history requires review')
-        return sorted(rows,key=lambda c:c['date'])
+        # Repeated candles must not inflate volume or indicator lookbacks.
+        unique={}
+        fields=('open','high','low','close','volume')
+        for row in rows:
+            prior=unique.get(row['date'])
+            if prior is not None:
+                matching=all(k in prior and k in row and prior[k] is not None
+                             and row[k] is not None and prior[k]==row[k] for k in fields)
+                if not matching:
+                    changed=', '.join(k for k in fields if k not in prior or k not in row
+                                      or prior.get(k) is None or row.get(k) is None or prior[k]!=row[k])
+                    raise ValueError(f"Schwab returned conflicting daily candles for {symbol} on {row['date']} "
+                                     f"({changed}); timestamps {prior['datetime']} and {row['datetime']}; history requires review")
+                continue
+            unique[row['date']]=row
+        return sorted(unique.values(),key=lambda c:c['date'])
     def options(self,symbol,today,cfg):
         raw=self.get('chains',symbol=market_symbol(symbol),contractType='PUT',strategy='SINGLE',includeUnderlyingQuote='true',fromDate=str(today+timedelta(days=cfg['put_dte_min'])),toDate=str(today+timedelta(days=cfg['put_dte_max'])))
         if raw.get('isDelayed') is not False:raise ValueError('Real-time Schwab option chain required')
