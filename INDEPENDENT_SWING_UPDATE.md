@@ -1,0 +1,7 @@
+# Independent swing qualification and diagnostics
+
+The old demand-zone gate remains mandatory for puts. Swings now reach their own entry and risk checks without requiring that separate retest. Common financial, stock liquidity, quote freshness, earnings and risk checks are retained. The active relative-volume threshold is unchanged, as are all financial thresholds and put risk/liquidity rules.
+
+The zone watchlist shows stage and blocking reasons. Diagnostics record independent swing technical passes alongside passes that also satisfy the old demand gate, plus technical sensitivity at volume thresholds 1.0, 1.1 and 1.3. These are same-snapshot counts, not historical returns or evidence of profitability; final qualification still requires all common checks. Fresh scans are required after migration; previous results/reviews are invalidated without changing saved valuations, portfolio/journal, credentials or user settings.
+
+Validation: 34 focused tests pass, including missing/failed common evidence, missing entry setup, earnings failures, put constraints, swing boundaries, demand checks and valuation. Browser JavaScript syntax checked. Live broker data and rendered results still require a deployed regular-session scan. Sector-specific financial rules and outcome backtesting are separate follow-up work; this release does not silently replace liabilities/equity with a different metric.

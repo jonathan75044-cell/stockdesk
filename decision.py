@@ -189,7 +189,10 @@ def review_symbol(data,symbol,cfg,today,model=None):
                                (o['ask']-o['bid']) if o['ask'] is not None and o['bid'] is not None else math.inf))
     report['options']=options[:60]
     swing_earnings=earnings is not None and not any(today<=d<=today+timedelta(days=14+cfg['earnings_buffer_days']) for d in earnings)
-    report['swing_eligible']=bool(sw and all(c['status']=='pass' for c in report['checks'][:-1]) and swing_earnings)
+    # Demand confirmation and put trend are put-strategy checks, not swing prerequisites.
+    report['swing_eligible']=swing_checks_pass(sw,report['checks'],swing_earnings)
+    report['swing_stage']='Meets trade checks' if report['swing_eligible'] else 'Awaiting confirmation' if (report.get('pullback') or {}).get('in_zone') else 'Outside zone / unverified'
+    report['swing_blockers']=[c['name']+': '+c['status'] for c in report['checks'] if c['name'] not in ('Demand confirmation','Put trend') and c['status']!='pass']+report.get('swing_rejections',[])+([] if swing_earnings else ['Earnings calendar missing or event inside swing window'])
     report['status']='Completed'
     report['completed_at']=datetime.now(timezone.utc).isoformat()
     report['suggestions']=['Resolve every fail or unknown before treating a setup as eligible.',
@@ -198,3 +201,6 @@ def review_symbol(data,symbol,cfg,today,model=None):
                            'Review sector concentration and downside scenarios before comparing premium.',
                            'Review DCF sensitivity; a high terminal-value share makes the estimate assumption-sensitive.']
     return report
+
+def swing_checks_pass(setup,checks,earnings_pass):
+    return bool(setup and earnings_pass and checks and all(c['status']=='pass' for c in checks if c['name'] not in ('Demand confirmation','Put trend')))

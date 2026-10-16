@@ -3,6 +3,7 @@ function confirmationStatus(item,{watch=false,stale=false,review=false}={}){
     if(stale||item.stale||item.market_ready===false)return 'Fresh review required';
     if(review&&item.status!=='Completed')return 'Checks pending';
     if(watch)return 'Awaiting confirmation';
+    if(item.swing_eligible||(!review&&item.swing))return 'Meets recorded swing filters';
     const zone=item.demand_zone;
     if(!zone)return review&&(item.checks||[]).some(c=>c.name==='Demand confirmation'&&c.status==='fail')?'Awaiting confirmation':'Confirmation unavailable';
     if(item.swing_eligible||item.eligible_contract_count>0||item.swing||item.put){
@@ -23,7 +24,7 @@ function confirmationEvidence(item,options={}){
     return '<b>'+esc(confirmationStatus(item,options))+'</b>'+(zone?'<br><small>Zone '+money(zone.low)+' – '+money(zone.high)+'<br>Confirmation: '+esc(zone.confirmed_date||'pending')+'<br>Invalidation: lower low below '+money(zone.low)+'</small>':'');
 }
 const confirmationGuide=document.createElement('section');confirmationGuide.className='card';confirmationGuide.style.margin='16px 0';
-confirmationGuide.innerHTML='<h3>Confirmation before entry</h3><p><b>Awaiting confirmation:</b> a recent completed bullish retest is still required. <b>Confirmed — checks pending:</b> demand passed, but later requirements remain. <b>Meets recorded filters:</b> all recorded requirements passed for the indicated strategy; verify fresh broker quotes, earnings and personal sizing before entry.</p><p class="note">A TradingView alert is a request to recheck evidence. It does not confirm the demand zone or make a stock eligible. A swing also requires its existing breakout and hold checks; a put requires its own trend, earnings and contract checks. No new entry rule has been substituted.</p>';
+confirmationGuide.innerHTML='<h3>Confirmation before entry</h3><p><b>In zone:</b> sourced swing retracement is 38.2%–61.8%. <b>Awaiting confirmation:</b> entry, financial or risk checks remain. <b>Meets trade checks:</b> recorded strategy requirements passed; verify fresh quotes and personal sizing.</p><p class="note">Swings use their own pullback, bullish reversal, support, trend, volume, earnings and reward/risk checks. The older demand-zone retest remains a put requirement and is shown as a comparison for swings. A zone or TradingView alert is not a buy signal.</p>';
 researchPanel.before(confirmationGuide);
 const tvPanel=document.createElement('section');tvPanel.className='card';tvPanel.style.margin='16px 0';
 tvPanel.innerHTML='<h3>TradingView alerts</h3><p id="tv-connection"></p><p class="note">Configure the webhook using TRADINGVIEW_ALERTS_SETUP.md in the update package. Use your signed-in TradingView account. An alert requests independent review, never an order. Received signals and review outcomes appear below.</p><div id="tv-events"></div>';

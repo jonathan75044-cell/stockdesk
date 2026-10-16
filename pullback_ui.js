@@ -9,7 +9,7 @@ function renderZones(){
  for(const r of rows){const tr=document.createElement('tr');const quoteFresh=Date.now()-Date.parse(r.quote_at)>=0&&Date.now()-Date.parse(r.quote_at)<=900000;
  const qualified=state.rows.find(x=>x.symbol===r.symbol&&x.swing);
  for(const value of [r.symbol,money(r.price),(100*r.retracement).toFixed(1)+'%',money(r.zone_low)+' – '+money(r.priority_high),r.low_date+' → '+r.high_date,
- (state.stale||!quoteFresh?'Fresh review required':qualified?'Meets recorded swing checks':'Entry / risk checks pending')+' · '+r.source+' · quote '+r.quote_at]){const td=document.createElement('td');td.textContent=value;tr.append(td)}
+ (state.stale||!quoteFresh?'Fresh review required':qualified?'Meets trade checks':r.swing_stage||'In zone · awaiting confirmation')+' · '+(r.swing_blockers||[]).join('; ')+' · '+r.source+' · quote '+r.quote_at]){const td=document.createElement('td');td.textContent=value;tr.append(td)}
  tr.title=r.method;body.append(tr);}
 }
 const renderBeforeZones=renderRows;renderRows=function(){renderBeforeZones();renderZones()};
