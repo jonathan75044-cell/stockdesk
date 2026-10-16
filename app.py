@@ -1,5 +1,5 @@
 import live_import
-import os,json,time,threading,hashlib,hmac,base64,sqlite3,secrets,math
+import os,json,time,threading,hashlib,hmac,base64,sqlite3,secrets,math,logging
 from pathlib import Path
 from datetime import datetime,timezone,timedelta
 from zoneinfo import ZoneInfo
@@ -14,7 +14,9 @@ from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='independent-swing-checks-2026-10-15'
+BUILD='scan-feedback-2026-10-15'
+logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
+logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
 from decision import review_symbol
 from auto_fcfe import estimate_automatic
@@ -43,9 +45,16 @@ def config():
         if get('rules_version') not in (3,4):saved.update({k:defaults[k] for k in keys})
         save('config',saved);save('rules_version',5)
         previous=get('state',{})
-        previous.update(status='Rules updated · awaiting fresh scan',rows=[],watchlist=[],golden_zones=[],completed_at=None)
+        save('previous_scan',previous)
+        previous=dict(status='Rules updated · awaiting fresh scan',rows=[],watchlist=[],golden_zones=[],completed_at=None,started_at=None,scanned=0,total=0,diagnostics=[],errors=[])
         save('state',previous);save('morning_digest',None)
         save('latest_review',None)
+    if get('scan_state_version')!=1:
+        previous=get('state',{})
+        if not previous.get('completed_at') and previous.get('status')!='Scanning' and previous.get('scan_build')!=BUILD:
+            if previous.get('diagnostics'):save('previous_scan',previous)
+            save('state',dict(status=previous.get('status','Awaiting fresh scan'),rows=[],watchlist=[],golden_zones=[],completed_at=None,started_at=None,scanned=0,total=0,diagnostics=[],errors=[]))
+        save('scan_state_version',1)
     return {**defaults,**saved}
 def stamp():return datetime.now(timezone.utc).isoformat()
 def json_evidence(value):
@@ -144,17 +153,41 @@ def tradingview_worker():
         except Exception:pass  # Retry persisted pending work; do not log webhook credentials.
         time.sleep(2)
 
-def scan(morning=False):
-    if not lock.acquire(False):return
+def request_scan():
+    if not lock.acquire(False):
+        return {'queued':False,'message':'A scan is already running.'},409
+    worker_started=False
+    try:
+        config()
+        data=Data()
+        if not data.token or not data.finn:
+            return {'queued':False,'message':'Connect Schwab and configure Finnhub before scanning.'},409
+        if data.clock()['state']!='open':
+            logger.info('Manual scan skipped: regular market closed')
+            return {'queued':False,'message':'Market closed. Live scans run during regular U.S. market hours. No new scan was started; previous results remain unchanged.'},409
+        threading.Thread(target=scan,kwargs={'lock_owned':True},daemon=True).start()
+        worker_started=True
+    except Exception as error:
+        logger.error('Manual scan request failed (%s)',type(error).__name__)
+        return {'queued':False,'message':'Unable to start scan. Check data connection and server logs.'},503
+    else:
+        return {'queued':True,'message':'Scan started.'},202
+    finally:
+        # The worker owns the reservation only after a successful start.
+        if not worker_started:lock.release()
+
+def scan(morning=False,lock_owned=False):
+    if not lock_owned and not lock.acquire(False):return
     try:
         cfg=config();data=Data()
         if not data.token or not data.finn:
             save('state',{'status':'Setup required · connect Schwab and configure Finnhub','rows':[],'errors':[]});return
         if data.clock()['state']!='open':
-            s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);return
+            s=get('state',{'rows':[]});s['status']='Market closed · agent waiting';save('state',s);logger.info('Scan skipped: regular market closed');return
         today=datetime.now(ZoneInfo('America/New_York')).date()
         symbols=list(dict.fromkeys('XYZ' if x.upper()=='SQ' else x.upper() for x in cfg['universe'].split()))
         state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'golden_zones':[],'scan_build':BUILD,'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
+        logger.info('Scan started: %s symbols',len(symbols))
         for symbol in symbols:
             detail={'symbol':symbol,'outcome':'Processing','stage':'Quote'}
             state['diagnostics'].append(detail)
@@ -298,6 +331,7 @@ def scan(morning=False):
             if detail['outcome']=='Qualified before final freshness and result limit':
                 detail['outcome']='Displayed' if detail['symbol'] in selected else 'Final freshness or result limit exclusion'
         state['status']='Monitoring';state['completed_at']=stamp();save('state',state)
+        logger.info('Scan completed: %s/%s processed, %s results, %s watchlist entries, %s errors',state['scanned'],state['total'],len(state['rows']),len(state['watchlist']),len(state['errors']))
         if morning:
             digest={'date':str(today),'completed_at':stamp(),'rows':state['rows'],'errors':state['errors'],'note':'Qualified at scan time; recheck live quotes before acting.'}
             save('morning_digest',digest);save('morning_done',str(today))
@@ -318,6 +352,7 @@ def scan(morning=False):
                     save('sent:'+key,True);alerts=get('alerts',[]);alerts.append({'at':stamp(),'symbol':row['symbol'],'type':kinds});save('alerts',alerts[-200:])
                 except requests.RequestException:state['errors'].append({'symbol':row['symbol'],'reason':'Notification delivery failed'});save('state',state)
     except Exception as e:
+        logger.error('Scan failed (%s)',type(e).__name__)
         s=get('state',{'rows':[]});s['status']='Data connection error';s['errors']=[{'reason':type(e).__name__}];save('state',s)
     finally:lock.release()
 
@@ -335,7 +370,7 @@ def agent():
                 morning=cfg_morning_due(now,config(),get('morning_done'))
                 if Data().clock()['state']=='open' and (morning or get('last_slot')!=slot):
                     save('last_slot',slot);scan(morning=morning)
-            except Exception:pass
+            except Exception as error:logger.error('Scheduler failed (%s)',type(error).__name__)
         time.sleep(60)
 
 class Handler(BaseHTTPRequestHandler):
@@ -482,7 +517,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond({'ok':True,'id':identifier})
             except (ValueError,TypeError,OverflowError):self.respond({'error':'Invalid entry. Check dates, quantity, prices, and required put fields. Closed trades need an exit price and close date.'},400)
             return
-        if self.path=='/api/scan':threading.Thread(target=scan,daemon=True).start();self.respond({'queued':True});return
+        if self.path=='/api/scan':
+            result,code=request_scan();self.respond(result,code);return
         if self.path=='/api/config':
             try:
                 n=int(self.headers.get('Content-Length','0'))
