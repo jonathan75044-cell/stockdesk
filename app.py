@@ -17,7 +17,7 @@ from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
 from entry_plan import swing_entry_plan
-BUILD='conditional-entry-plans-2026-10-16'
+BUILD='confirmed-resistance-2026-10-16'
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
@@ -52,6 +52,14 @@ def config():
         previous=dict(status='Rules updated · awaiting fresh scan',rows=[],watchlist=[],golden_zones=[],completed_at=None,started_at=None,scanned=0,total=0,diagnostics=[],errors=[])
         save('state',previous);save('morning_digest',None)
         save('latest_review',None)
+    if get('resistance_rules_version')!=1:
+        if saved.get('min_avg_volume',1000000)==1000000:
+            saved['min_avg_volume']=5000000
+            save('config',saved)
+        save('previous_scan',get('state',{}))
+        save('state',dict(status='Resistance rules updated · run a fresh scan',rows=[],watchlist=[],golden_zones=[],completed_at=None,started_at=None,scanned=0,total=0,diagnostics=[],errors=[]))
+        save('morning_digest',None);save('latest_review',None)
+        save('resistance_rules_version',1)
     if get('scan_state_version')!=1:
         previous=get('state',{})
         if not previous.get('completed_at') and previous.get('status')!='Scanning' and previous.get('scan_build')!=BUILD:
