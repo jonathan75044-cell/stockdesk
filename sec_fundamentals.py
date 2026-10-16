@@ -13,6 +13,8 @@ CIKS={'DE':'0000315189'}
 REVENUE=('RevenueFromContractWithCustomerExcludingAssessedTax','Revenues',
          'SalesRevenueNet','RevenueFromContractWithCustomerIncludingAssessedTax')
 _cache={}
+CACHE_MAX_ENTRIES=4
+CACHE_MAX_RESPONSE_BYTES=1000000
 _guard=threading.Lock()
 _last_request=0.0
 
@@ -24,7 +26,7 @@ class SECDataError(ValueError):
 
 
 def fetch_json(path):
-    """Fixed SEC host, identified requests, one request/second, one-hour cache."""
+    """Fixed SEC host, identified requests, one request/second, bounded small-response cache."""
     global _last_request
     if path!='company_tickers.json' and not re.fullmatch(r'(submissions|api/xbrl/companyfacts)/CIK\d{10}\.json',path):
         raise SECDataError('Unsupported SEC endpoint')
@@ -33,6 +35,10 @@ def fetch_json(path):
         raise SECDataError('Configure SEC_USER_AGENT with app name and contact email')
     with _guard:
         now=time.monotonic()
+        # Companyfacts expands substantially when decoded; do not retain it.
+        for key,(saved_at,_) in list(_cache.items()):
+            if not 0<=now-saved_at<3600 or key.startswith('api/xbrl/companyfacts/'):
+                del _cache[key]
         cached=_cache.get(path)
         if cached and 0<=now-cached[0]<3600:return cached[1]
         time.sleep(max(0,1-(now-_last_request)))
@@ -49,7 +55,10 @@ def fetch_json(path):
             raise SECDataError('SEC request failed (HTTP '+str(error.code)+'); no stale-cache substitution') from None
         except (URLError,TimeoutError,OSError,ValueError):
             raise SECDataError('SEC request failed or returned invalid JSON') from None
-        _cache[path]=(time.monotonic(),result)
+        if not path.startswith('api/xbrl/companyfacts/') and len(raw)<=CACHE_MAX_RESPONSE_BYTES:
+            while len(_cache)>=CACHE_MAX_ENTRIES:
+                del _cache[min(_cache,key=lambda key:_cache[key][0])]
+            _cache[path]=(time.monotonic(),result)
         return result
 
 
