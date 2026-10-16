@@ -1,3 +1,4 @@
+from market_context import load_market_context, relative_strength
 import live_import
 import os,json,time,threading,hashlib,hmac,base64,sqlite3,secrets,math,logging
 from pathlib import Path
@@ -189,6 +190,9 @@ def scan(morning=False,lock_owned=False):
         symbols=canonical_universe(cfg['universe'])
         state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'golden_zones':[],'scan_build':BUILD,'research_only':research_mode,'market_clock':market,'history_warnings':[],'data_dates':[],'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
         logger.info('Scan started: %s symbols',len(symbols))
+        cutoff=today+timedelta(days=1) if research_mode and market.get('completed_today') else today
+        state['market_context']=load_market_context(data,cutoff,today,bool(market.get('completed_today')))
+        save('state',state)
         for symbol in symbols:
             detail={'symbol':symbol,'outcome':'Processing','stage':'Quote'}
             state['diagnostics'].append(detail)
@@ -216,7 +220,7 @@ def scan(morning=False,lock_owned=False):
                 pullback=pullback_zone(price,days,m['atr'])
                 detail['pullback']=pullback
                 if pullback and pullback['in_zone']:
-                    state['golden_zones'].append(dict(symbol=symbol,name=q.get('description',symbol),price=price,research_only=research_mode,data_date=days[-1]['date'],quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat(),entry_plan=swing_entry_plan(price,days,m,pullback,cfg),**pullback))
+                    state['golden_zones'].append(dict(symbol=symbol,name=q.get('description',symbol),price=price,research_only=research_mode,data_date=days[-1]['date'],quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat(),entry_plan={**swing_entry_plan(price,days,m,pullback,cfg),'relative_strength':relative_strength(days,state['market_context'])},**pullback))
                 if price<cfg['min_price']:
                     detail['outcome']='Below minimum price';continue
                 if m['avgvol']<cfg['min_avg_volume']:

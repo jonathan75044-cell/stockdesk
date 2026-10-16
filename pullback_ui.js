@@ -3,6 +3,7 @@ const zonePanel=document.createElement('section');zonePanel.className='panel car
 zonePanel.innerHTML='<h2>Swing pullback watchlist · days to weeks</h2><p>Discovery: 38.2%–61.8% · Priority golden zone: 50%–61.8%. Dated recent daily swing anchors, not 52-week extremes. Independent of fundamental eligibility; membership is not an entry signal.</p><label><input id="golden-only" type="checkbox" checked> Show priority 50%–61.8% only</label><p id="zone-status"></p><p>Optional hypothetical sizing: <label>Cash budget ($) <input id="plan-cash" type="number" min="0" step="any" placeholder="Enter budget"></label> <label>Maximum planned loss ($) <input id="plan-risk" type="number" min="0" step="any" placeholder="Enter risk limit"></label></p><div class="tablewrap"><table><thead><tr><th>Stock</th><th>Price</th><th>Retracement</th><th>50%–61.8% band</th><th>Anchor dates</th><th>Evidence / status</th><th>Entry plan / chart</th></tr></thead><tbody id="zone-rows"></tbody></table></div>';
 document.querySelector('#desk .reports').before(zonePanel);
 function renderZones(){
+ renderMarketContext();
  const rows=(state.golden_zones||[]).filter(r=>!document.getElementById('golden-only').checked||r.priority).sort((a,b)=>Number(b.priority)-Number(a.priority)||a.symbol.localeCompare(b.symbol));
  document.getElementById('zone-status').textContent=(state.stale?'STALE / INCOMPLETE — ':'')+rows.length+' zone candidates. Conditional plans are research only; pending checks must pass before entry.';
  const body=document.getElementById('zone-rows');body.replaceChildren();
@@ -36,7 +37,32 @@ function entryPlanMarkup(row){
  const freshQuote=Date.now()-Date.parse(row.quote_at)>=0&&Date.now()-Date.parse(row.quote_at)<=900000;
  const status=state.stale?'STALE — refresh before using these levels':state.research_only?'After-hours research — live checks pending':!freshQuote?'Quote expired — refresh before using these levels':'Conditional plan — verify all checks';
  const values=[['Planning entry (not an order)',money(p.entry)],['Stop reference',p.stop==null?'Unavailable':money(p.stop)],['First historical target',p.target1==null?'Unavailable':money(p.target1)],['Second historical target',p.target2==null?'Unavailable':money(p.target2)],['Risk per share',p.risk_per_share==null?'Unavailable':money(p.risk_per_share)],['First-target reward / risk',p.reward_risk==null?'Unavailable':p.reward_risk.toFixed(2)+':1 (minimum '+p.minimum_rr+':1)'],['Entry ceiling for minimum reward / risk',p.max_entry_for_rr==null?'Unavailable':money(p.max_entry_for_rr)],['Average daily volume',Number(p.average_volume).toLocaleString()+' / minimum '+Number(p.minimum_average_volume).toLocaleString()],['Relative volume',p.relative_volume+'× / minimum '+p.minimum_relative_volume+'×'],['Financial checks',p.financial_status],['Earnings check',p.earnings_status]];
- return '<h3>'+esc(row.symbol)+' · conditional entry plan</h3><p><strong>'+esc(status)+'</strong></p><p>Daily bars through '+esc(p.data_date)+'. Plan is not a qualification or buy signal.</p><p>'+esc(p.trigger)+'</p><dl>'+values.map(([label,value])=>'<dt>'+esc(label)+'</dt><dd>'+esc(value)+'</dd>').join('')+'</dl><ul>'+p.checks.map(check=>'<li>'+esc((check.passed?'Pass: ':'Pending / failed: ')+check.name)+'</li>').join('')+'</ul><p>Valuation: separate review required; this plan does not establish undervaluation.</p><p>'+esc((row.swing_blockers||[]).join('; '))+'</p><p>'+esc(p.invalidation)+'</p><p>'+esc(p.method)+'</p><p>'+(size?'Hypothetical size: '+size.shares+' shares · cost '+money(size.cost)+' · planned stop loss '+money(size.plannedRisk)+'. Fees and gaps are excluded; actual loss can exceed this amount.':'Enter your cash budget and maximum planned loss above to calculate hypothetical shares.')+'</p><p><a target="_blank" rel="noopener noreferrer" href="'+esc(tradingViewLink(row.symbol))+'">View in TradingView</a> · Confirm the ticker and exchange on the chart.</p>';
+ return '<h3>'+esc(row.symbol)+' · conditional entry plan</h3><p><strong>'+esc(status)+'</strong></p><p>Daily bars through '+esc(p.data_date)+'. Plan is not a qualification or buy signal.</p><p>'+esc(p.trigger)+'</p>'+marketPlanMarkup(p)+'<dl>'+values.map(([label,value])=>'<dt>'+esc(label)+'</dt><dd>'+esc(value)+'</dd>').join('')+'</dl><ul>'+p.checks.map(check=>'<li>'+esc((check.passed?'Pass: ':'Pending / failed: ')+check.name)+'</li>').join('')+'</ul><p>Valuation: separate review required; this plan does not establish undervaluation.</p><p>'+esc((row.swing_blockers||[]).join('; '))+'</p><p>'+esc(p.invalidation)+'</p><p>'+esc(p.method)+'</p><p>'+(size?'Hypothetical size: '+size.shares+' shares · cost '+money(size.cost)+' · planned stop loss '+money(size.plannedRisk)+'. Fees and gaps are excluded; actual loss can exceed this amount.':'Enter your cash budget and maximum planned loss above to calculate hypothetical shares.')+'</p><p><a target="_blank" rel="noopener noreferrer" href="'+esc(tradingViewLink(row.symbol))+'">View in TradingView</a> · Confirm the ticker and exchange on the chart.</p>';
 }
 document.getElementById('plan-cash').oninput=renderZones;
 document.getElementById('plan-risk').oninput=renderZones;
+
+const marketPanel=document.createElement('section');marketPanel.className='panel card';
+zonePanel.before(marketPanel);
+function marketCaution(){
+ const m=state.market_context||{};
+ if(state.stale)return 'Market context needs a fresh scan.';
+ if(!m.SPY?.available||!m.QQQ?.available)return 'Market context is incomplete. Review benchmark charts.';
+ if([m.SPY,m.QQQ].some(x=>x.freshness==='Latest completed session missing'))return 'Latest completed benchmark session is missing. Refresh before reviewing a plan.';
+ if([m.SPY,m.QQQ].every(x=>x.close<x.ma50))return 'Caution: both benchmarks closed below their 50-day averages.';
+ if([m.SPY,m.QQQ].every(x=>x.trend==='Uptrend'))return 'Both benchmarks meet the displayed uptrend rule. This does not confirm an individual entry.';
+ return 'Mixed or weakening market context: review the benchmark charts before considering an entry.';
+}
+function renderMarketContext(){
+ const m=state.market_context||{};
+ marketPanel.innerHTML='<h2>Market context · SPY &amp; QQQ</h2><p>Completed daily closes, refreshed with each scan. Informational only; screening rules are unchanged.</p><p><strong>'+esc(marketCaution())+'</strong></p>'+['SPY','QQQ'].map(symbol=>{
+ const b=m[symbol];
+ return '<h3>'+symbol+'</h3><p>'+(b?.available?esc(b.trend)+' · Close '+money(b.close)+' · 20-day average '+money(b.ma20)+' · 50-day average '+money(b.ma50)+' · Through '+esc(b.data_date)+' · '+esc(b.freshness):esc(b?.reason||'Run a fresh scan to load benchmark context.'))+'</p><p><a target="_blank" rel="noopener noreferrer" href="'+tradingViewLink(symbol)+'">View '+symbol+' in TradingView</a></p>';
+ }).join('')+'<p>Uptrend: close &gt; 20-day average &gt; 50-day average. Downtrend: close &lt; 20-day average &lt; 50-day average. Otherwise: Mixed. Closing data is not a live quote.</p>';
+}
+function marketPlanMarkup(plan){
+ return '<h4>Market context and relative strength</h4><p>'+esc(marketCaution())+'</p>'+['SPY','QQQ'].map(symbol=>{
+ const r=plan.relative_strength?.[symbol];
+ return '<p>'+symbol+': '+(r?.available?'stock '+r.stock_return.toFixed(2)+'% versus benchmark '+r.benchmark_return.toFixed(2)+'% · difference '+r.difference_pp.toFixed(2)+' percentage points · '+esc(r.start_date)+' → '+esc(r.end_date):esc(r?.reason||'Run a fresh scan for comparison.'))+'</p>';
+ }).join('')+'<p>20-session close-to-close returns over identical dates. Positive difference means the stock outperformed; this is not a buy signal.</p>';
+}
