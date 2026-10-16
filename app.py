@@ -8,13 +8,14 @@ from urllib.parse import urlparse,parse_qs
 from http.cookies import SimpleCookie
 from contextlib import closing
 from schwab import Schwab
+from symbols import canonical_symbol,canonical_universe
 import journal
 import requests
 from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='completed-session-history-2026-10-15'
+BUILD='verified-fundamental-mappings-2026-10-16'
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
@@ -55,7 +56,9 @@ def config():
             if previous.get('diagnostics'):save('previous_scan',previous)
             save('state',dict(status=previous.get('status','Awaiting fresh scan'),rows=[],watchlist=[],golden_zones=[],completed_at=None,started_at=None,scanned=0,total=0,diagnostics=[],errors=[]))
         save('scan_state_version',1)
-    return {**defaults,**saved}
+    result={**defaults,**saved}
+    result['universe']=' '.join(canonical_universe(result['universe']))
+    return result
 def stamp():return datetime.now(timezone.utc).isoformat()
 def json_evidence(value):
     """Keep optional malformed numeric evidence from breaking the browser JSON."""
@@ -182,7 +185,7 @@ def scan(morning=False,lock_owned=False):
             save('state',{'status':'Setup required · connect Schwab and configure Finnhub','rows':[],'errors':[]});return
         market=data.clock();research_mode=market['state']!='open'
         today=datetime.now(ZoneInfo('America/New_York')).date()
-        symbols=list(dict.fromkeys('XYZ' if x.upper()=='SQ' else x.upper() for x in cfg['universe'].split()))
+        symbols=canonical_universe(cfg['universe'])
         state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'golden_zones':[],'scan_build':BUILD,'research_only':research_mode,'market_clock':market,'history_warnings':[],'data_dates':[],'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
         logger.info('Scan started: %s symbols',len(symbols))
         for symbol in symbols:
@@ -454,7 +457,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not 0<n<=4096:raise tradingview_alerts.AlertError('Invalid alert size')
                 if self.headers.get('Content-Type','').split(';')[0].strip()!='application/json':raise tradingview_alerts.AlertError('Use a JSON alert message')
                 payload=json.loads(self.rfile.read(n))
-                universe={'XYZ' if s=='SQ' else s for s in config()['universe'].split()}
+                universe=set(canonical_universe(config()['universe']))
                 event=tradingview_alerts.validate_alert(payload,os.getenv('TRADINGVIEW_WEBHOOK_TOKEN',''),universe)
                 self.respond(tradingview_alerts.enqueue(conn,event),202)
             except tradingview_alerts.AlertError as error:self.respond({'error':str(error)},error.code)
@@ -483,6 +486,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(payload,dict) or set(payload)!={'symbol'}:raise ValueError()
                 symbol=payload['symbol']
                 if not isinstance(symbol,str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):raise ValueError()
+                symbol=canonical_symbol(symbol)
                 if not review_lock.acquire(False):self.respond({'error':'Another stock review is in progress'},409);return
                 save('latest_review',{'symbol':symbol,'status':'Queued','started_at':stamp()})
                 try:threading.Thread(target=run_review,args=(symbol,),daemon=True).start()
