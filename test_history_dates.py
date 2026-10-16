@@ -21,9 +21,10 @@ class DailyHistoryTests(unittest.TestCase):
         candles=[{'datetime':int(datetime(2026,10,d,tzinfo=NY).timestamp()*1000),'close':100,'volume':6000000} for d in (14,15)]
         with patch('schwab.datetime') as dt,patch.object(Schwab,'get',return_value={'candles':candles}) as get:
             dt.now.return_value=now;dt.fromtimestamp.side_effect=datetime.fromtimestamp
+            dt.combine.side_effect=datetime.combine;dt.min=datetime.min
             rows=Schwab().days('AAPL',cutoff)
             params=get.call_args.kwargs
-            self.assertEqual(params['endDate'],int(now.timestamp()*1000))
+            self.assertEqual(params['endDate'],int(datetime.combine(cutoff-timedelta(days=1),datetime.min.time(),NY).replace(hour=16).timestamp()*1000))
             self.assertEqual(params['startDate'],int((now-timedelta(days=730)).timestamp()*1000))
             self.assertNotIn('period',params)
             return rows
@@ -59,3 +60,40 @@ class DailyHistoryTests(unittest.TestCase):
     def test_unfinished_day_excluded_before_duplicate_validation(self):
         c=self.candle(16)
         self.assertEqual(self.duplicate_history([c,dict(c,close=999)]),[])
+
+    def test_live_response_regression_excludes_appended_snapshot(self):
+        historical={'open':346.95,'high':347.85,'low':341.6,'close':342.0,
+                    'volume':39910007,'datetime':1792040400000}
+        snapshot=dict(historical,volume=39767218,datetime=1792036800000)
+        close=datetime(2026,10,15,16,tzinfo=NY)
+        def response(path,**params):
+            return {'candles':[historical] if params['endDate']<=int(close.timestamp()*1000)
+                    else [historical,snapshot]}
+        with patch.object(Schwab,'get',side_effect=response),patch('schwab.datetime') as dt:
+            dt.now.return_value=close.replace(hour=22);dt.combine.side_effect=datetime.combine
+            dt.min=datetime.min;dt.fromtimestamp.side_effect=datetime.fromtimestamp
+            rows=Schwab().days('AAPL',date(2026,10,16))
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['volume'],39910007)
+        self.assertEqual(rows[0]['date'],'2026-10-15')
+    def test_exchange_early_close_bounds_history(self):
+        s=Schwab();now=datetime(2026,10,15,14,tzinfo=NY)
+        market={'equity':{'EQ':{'isOpen':False,'sessionHours':{'regularMarket':[
+            {'start':'2026-10-15T09:30:00-04:00','end':'2026-10-15T13:00:00-04:00'}]}}}}
+        with patch('schwab.datetime') as dt,patch.object(s,'get',side_effect=[market,{'candles':[]}]) as get:
+            dt.now.return_value=now;dt.fromisoformat.side_effect=datetime.fromisoformat
+            dt.combine.side_effect=datetime.combine;dt.min=datetime.min
+            clock=s.clock();s.days('AAPL',date(2026,10,16))
+        self.assertTrue(clock['completed_today'])
+        self.assertEqual(clock['completed_session_end'],'2026-10-15T13:00:00-04:00')
+        self.assertEqual(get.call_args.kwargs['endDate'],int(now.replace(hour=13).timestamp()*1000))
+    def test_history_bound_uses_eastern_dst(self):
+        for day,utc_hour in ((date(2026,1,15),21),(date(2026,7,15),20)):
+            with self.subTest(day=day),patch.object(Schwab,'get',return_value={'candles':[]}) as get,patch('schwab.datetime') as dt:
+                dt.now.return_value=datetime(2026,10,15,22,tzinfo=NY)
+                dt.combine.side_effect=datetime.combine;dt.min=datetime.min
+                Schwab().days('AAPL',day+timedelta(days=1))
+                from datetime import timezone
+                end=datetime.fromtimestamp(get.call_args.kwargs['endDate']/1000,timezone.utc)
+                self.assertEqual(end.hour,utc_hour)
+                self.assertEqual(end.date(),day)

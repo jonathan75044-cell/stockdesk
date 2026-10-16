@@ -14,7 +14,7 @@ from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='bounded-sec-memory-2026-10-15'
+BUILD='completed-session-history-2026-10-15'
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
