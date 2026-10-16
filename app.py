@@ -14,7 +14,7 @@ from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='after-hours-research-2026-10-15'
+BUILD='sec-valuation-matching-2026-10-15'
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
@@ -314,7 +314,7 @@ def scan(morning=False,lock_owned=False):
         for item in state['rows']+state['watchlist']:
             if item['symbol'] in get('valuation_models',{}):continue
             key='automatic_valuation:'+item['symbol'];cached=get(key)
-            if cached and 0<=time.time()-cached['checked_at']<86400:
+            if cached and cached.get('value',{}).get('status')=='estimated' and 0<=time.time()-cached['checked_at']<86400:
                 value=cached['value']
             elif not os.getenv('SEC_USER_AGENT'):
                 value={'status':'unavailable','reason':'Configure SEC_USER_AGENT to enable automatic valuation inputs'}
@@ -329,6 +329,8 @@ def scan(morning=False,lock_owned=False):
                 save(key,{'checked_at':time.time(),'value':value})
             else:value={'status':'unavailable','reason':'Automatic-data time budget reached; use Review or wait for a later scan'}
             state['automatic_valuations'][item['symbol']]=value
+            detail=next((d for d in state['diagnostics'] if d['symbol']==item['symbol']),None)
+            if detail is not None:detail['valuation']=value
         state['rows']=[r for r in state['rows'] if research_mode or (0<=time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900
                        and (not r['put'] or 0<=time.time()-r['put']['quote_timestamp']<=900))]
         state['watchlist']=[w for w in state['watchlist'] if research_mode or 0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900]

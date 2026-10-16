@@ -65,8 +65,23 @@ def cashflow_inputs(symbol,cik,submissions,facts,today):
     ocf=select('us-gaap','NetCashProvidedByUsedInOperatingActivities')
     if ocf is None:fail('Missing annual operating cash flow')
     start=audit['facts']['NetCashProvidedByUsedInOperatingActivities']['start']
-    capex=select('us-gaap','PaymentsToAcquirePropertyPlantAndEquipment',start=start)
-    if capex is None:fail('Missing matching annual capital expenditure')
+    # The productive-assets aggregate includes PP&E, software and intangibles.
+    # Prefer the reported aggregate; never sum it with its narrower components.
+    capex=select('us-gaap','PaymentsToAcquireProductiveAssets',start=start)
+    capex_tag='PaymentsToAcquireProductiveAssets'
+    if capex is None:
+        capex_tag='PaymentsToAcquirePropertyPlantAndEquipment'
+        capex=select('us-gaap',capex_tag,start=start)
+    audit['capital_expenditure']={'selected_tag':capex_tag if capex is not None else None,
+        'required_start':start,'required_end':end,'required_accession':accession}
+    if capex is None:
+        audit['capital_expenditure']['available_concepts']=[
+            {'tag':tag,'description':concept.get('description'),
+             'contexts':[{k:r.get(k) for k in ('start','end','accn','form','filed','val')}
+                         for r in concept.get('units',{}).get('USD',[]) if r.get('accn')==accession]}
+            for tag,concept in gaap.items() if any(word in tag.lower() for word in
+                ('productiveassets','propertyplantandequipment','capitalexpend'))]
+        fail('Missing matching annual capital expenditure; inspect capital_expenditure audit')
     if capex<0:fail('Capital expenditure sign requires review')
     # Only aggregate debt flows are accepted. Long-term-only flows can omit
     # commercial paper or other short-term financing and are not substituted.
