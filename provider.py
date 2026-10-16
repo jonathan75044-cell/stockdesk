@@ -57,8 +57,8 @@ class Data:
             self._annual_reports[symbol]={'cik':payload.get('cik')} if isinstance(payload,dict) else {}
             return parse_annual_quality(payload,today)
         except (ValueError,requests.RequestException) as original:
-            if symbol!='DE':raise
-            from sec_fundamentals import load_annual_payload,SECDataError
+            from sec_fundamentals import load_annual_payload,SECDataError,CIKS
+            if symbol not in CIKS:raise
             original_audit=getattr(original,'details',{})
             audit={}
             try:
@@ -176,6 +176,14 @@ def parse_annual_quality(payload,today=None):
         equity=parent+(nci if nci is not None else 0)
         audit['equity_basis']='Parent equity plus reported noncontrolling interest; absent NCI treated as zero'
     debt=value(current,'bs',['Liabilities'],'total_liabilities',False)
+    if debt is None:
+        current_debt=value(current,'bs',['LiabilitiesCurrent'],'current_liabilities',False)
+        noncurrent_debt=value(current,'bs',['LiabilitiesNoncurrent'],'noncurrent_liabilities',False)
+        if current_debt is not None and noncurrent_debt is not None:
+            if current_debt<0 or noncurrent_debt<0:fail('Negative liability component; review filing')
+            debt=current_debt+noncurrent_debt
+            audit['fields']['total_liabilities']={'derivation':'LiabilitiesCurrent plus LiabilitiesNoncurrent',
+                'value':debt,'period':str(end),'components':{'LiabilitiesCurrent':current_debt,'LiabilitiesNoncurrent':noncurrent_debt}}
     if debt is None:
         if not total_equity_known:fail('Cannot derive liabilities: consolidated total equity or explicit noncontrolling interest is missing')
         assets_total=value(current,'bs',['Assets'],'total_assets')

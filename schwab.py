@@ -5,12 +5,14 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 import requests
+from symbols import canonical_symbol
 
 GUARD=threading.RLock()
 NY=ZoneInfo('America/New_York')
 SCHWAB_SYMBOLS={'BRK.B':'BRK/B'}
 
 def market_symbol(symbol):
+    symbol=canonical_symbol(symbol)
     return SCHWAB_SYMBOLS.get(symbol,symbol)
 
 class Schwab:

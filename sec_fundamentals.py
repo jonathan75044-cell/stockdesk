@@ -1,4 +1,4 @@
-"""Conservative SEC companyfacts adapter. DE only; no inferred custom concepts."""
+"""Conservative SEC companyfacts adapter. Explicitly verified issuers; no inferred custom concepts."""
 import json
 import math
 import os
@@ -9,7 +9,7 @@ from datetime import date,datetime,timezone
 from urllib.error import HTTPError,URLError
 from urllib.request import Request,urlopen
 
-CIKS={'DE':'0000315189'}
+CIKS={'DE':'0000315189','LRCX':'0000707549','PANW':'0001327567'}
 REVENUE=('RevenueFromContractWithCustomerExcludingAssessedTax','Revenues',
          'SalesRevenueNet','RevenueFromContractWithCustomerIncludingAssessedTax')
 _cache={}

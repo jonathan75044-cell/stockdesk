@@ -1,4 +1,5 @@
 """Bounded, authenticated research signals. Never grant trade eligibility."""
+from symbols import canonical_symbol
 import hashlib,hmac,json,math,re,time
 from contextlib import closing
 from datetime import datetime,timezone
@@ -15,7 +16,8 @@ def validate_alert(payload,secret,universe,now=None):
     if set(payload)-{'token','symbol','exchange','time','trigger','price'}:raise AlertError('Unexpected alert fields')
     symbol=payload.get('symbol');exchange=payload.get('exchange')
     if not isinstance(symbol,str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',symbol):raise AlertError('Use the Stockdesk stock symbol')
-    if symbol not in universe:raise AlertError('Symbol is not in the configured stock universe')
+    symbol=canonical_symbol(symbol)
+    if symbol not in {canonical_symbol(s) for s in universe}:raise AlertError('Symbol is not in the configured stock universe')
     if exchange not in ('NYSE','NASDAQ','AMEX','BATS','ARCA','NYSEARCA'):raise AlertError('Unsupported stock exchange')
     trigger=payload.get('trigger')
     if not isinstance(trigger,str) or not re.fullmatch(r'[A-Za-z0-9 _.-]{1,80}',trigger):raise AlertError('Use a short trigger label')
