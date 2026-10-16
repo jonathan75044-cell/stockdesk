@@ -71,7 +71,10 @@ class Schwab:
         regular=market.get('sessionHours',{}).get('regularMarket',[])
         opened=bool(market.get('isOpen')) and any(datetime.fromisoformat(p['start'])<=now<datetime.fromisoformat(p['end']) for p in regular)
         current_session=next((p for p in regular if datetime.fromisoformat(p['start'])<=now<datetime.fromisoformat(p['end'])),None)
-        return {'state':'open' if opened else 'closed','regular_session_end':current_session['end'] if opened and current_session else None,'completed_today':any(datetime.fromisoformat(p['end'])<=now for p in regular)}
+        completed=[datetime.fromisoformat(p['end']) for p in regular if datetime.fromisoformat(p['end'])<=now]
+        self._completed_session_end=max(completed) if completed else None
+        return {'state':'open' if opened else 'closed','regular_session_end':current_session['end'] if opened and current_session else None,
+                'completed_today':bool(completed),'completed_session_end':self._completed_session_end.isoformat() if completed else None}
     def quotes(self,symbols):
         raw=self.get('quotes',symbols=','.join(market_symbol(s) for s in symbols),fields='quote,reference')
         result=[]
@@ -83,10 +86,18 @@ class Schwab:
             result.append({'symbol':symbol,'description':item.get('reference',{}).get('description',symbol),'last':q.get('lastPrice'),'volume':q.get('totalVolume'),'trade_date':q.get('tradeTime')})
         return result
     def days(self,symbol,today):
-        # Without endDate the provider defaults to the prior trading day.
+        # Bound the request to the last eligible day's regular-session close.
+        # Asking through 'now' after hours can append a conflicting same-day
+        # snapshot to the historical daily candle. Do not choose between them.
         now=datetime.now(NY)
+        eligible_day=today-timedelta(days=1)
+        history_end=datetime.combine(eligible_day,datetime.min.time(),NY).replace(hour=16)
+        completed_end=getattr(self,'_completed_session_end',None)
+        if completed_end is not None and completed_end.astimezone(NY).date()==eligible_day:
+            history_end=completed_end  # Honor an exchange-reported early close.
+        history_end=min(history_end,now)
         raw=self.get('pricehistory',symbol=market_symbol(symbol),periodType='year',frequencyType='daily',frequency=1,
-                     startDate=int((now-timedelta(days=730)).timestamp()*1000),endDate=int(now.timestamp()*1000),needExtendedHoursData='false')
+                     startDate=int((now-timedelta(days=730)).timestamp()*1000),endDate=int(history_end.timestamp()*1000),needExtendedHoursData='false')
         rows=[]
         for c in raw.get('candles',[]):
             d=datetime.fromtimestamp(c['datetime']/1000,NY).date()
