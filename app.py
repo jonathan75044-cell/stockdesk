@@ -14,7 +14,7 @@ from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='sec-valuation-matching-2026-10-15'
+BUILD='daily-history-end-date-2026-10-15'
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
@@ -183,7 +183,7 @@ def scan(morning=False,lock_owned=False):
         market=data.clock();research_mode=market['state']!='open'
         today=datetime.now(ZoneInfo('America/New_York')).date()
         symbols=list(dict.fromkeys('XYZ' if x.upper()=='SQ' else x.upper() for x in cfg['universe'].split()))
-        state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'golden_zones':[],'scan_build':BUILD,'research_only':research_mode,'data_dates':[],'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
+        state={'status':'Scanning','started_at':stamp(),'rows':[],'watchlist':[],'golden_zones':[],'scan_build':BUILD,'research_only':research_mode,'market_clock':market,'history_warnings':[],'data_dates':[],'errors':[],'scanned':0,'total':len(symbols),'diagnostics':[]};save('state',state)
         logger.info('Scan started: %s symbols',len(symbols))
         for symbol in symbols:
             detail={'symbol':symbol,'outcome':'Processing','stage':'Quote'}
@@ -193,6 +193,11 @@ def scan(morning=False,lock_owned=False):
                 cutoff=today+timedelta(days=1) if research_mode and market.get('completed_today') else today
                 days=data.days(symbol,cutoff)
                 if not days or not 0<=(today-datetime.fromisoformat(days[-1]['date']).date()).days<=5:raise ValueError('Daily history stale')
+                detail['daily_history']={'cutoff_exclusive':str(cutoff),'latest_returned_date':days[-1]['date'],'completed_today':bool(market.get('completed_today'))}
+                if research_mode and market.get('completed_today') and days[-1]['date']!=str(today):
+                    warning={'symbol':symbol,'reason':'Latest completed session '+str(today)+' not returned; using '+days[-1]['date']+' for research only'}
+                    state['history_warnings'].append(warning)
+                    detail['daily_history']['warning']=warning['reason']
                 if research_mode:
                     price=float(days[-1]['close'])
                     if not math.isfinite(price) or price<=0:raise ValueError('Invalid closing price')
@@ -311,7 +316,9 @@ def scan(morning=False,lock_owned=False):
         # Extra display requests must not extend the freshness of trade quotes.
         state['status']='Loading automatic valuations';state['automatic_valuations']={};save('state',state)
         auto_deadline=time.monotonic()+90
-        for item in state['rows']+state['watchlist']:
+        valuation_items=state['rows']+state['watchlist']
+        for valuation_index,item in enumerate(valuation_items,1):
+            state['status']='Loading automatic valuations · '+str(valuation_index)+'/'+str(len(valuation_items))+' · '+item['symbol'];save('state',state)
             if item['symbol'] in get('valuation_models',{}):continue
             key='automatic_valuation:'+item['symbol'];cached=get(key)
             if cached and cached.get('value',{}).get('status')=='estimated' and 0<=time.time()-cached['checked_at']<86400:
