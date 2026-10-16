@@ -15,7 +15,8 @@ from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='verified-fundamental-mappings-2026-10-16'
+from entry_plan import swing_entry_plan
+BUILD='conditional-entry-plans-2026-10-16'
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
@@ -215,7 +216,7 @@ def scan(morning=False,lock_owned=False):
                 pullback=pullback_zone(price,days,m['atr'])
                 detail['pullback']=pullback
                 if pullback and pullback['in_zone']:
-                    state['golden_zones'].append(dict(symbol=symbol,name=q.get('description',symbol),price=price,research_only=research_mode,data_date=days[-1]['date'],quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat(),**pullback))
+                    state['golden_zones'].append(dict(symbol=symbol,name=q.get('description',symbol),price=price,research_only=research_mode,data_date=days[-1]['date'],quote_at=datetime.fromtimestamp(ts,timezone.utc).isoformat(),entry_plan=swing_entry_plan(price,days,m,pullback,cfg),**pullback))
                 if price<cfg['min_price']:
                     detail['outcome']='Below minimum price';continue
                 if m['avgvol']<cfg['min_avg_volume']:
@@ -247,6 +248,7 @@ def scan(morning=False,lock_owned=False):
                     detail['sec_audit']=research['quality']['sec_audit']
                 detail['fundamental_rejections']=[]
                 quality=fundamental_gate(research,cfg,today,detail['fundamental_rejections'])
+                detail['financial_checks_passed']=bool(quality)
                 detail['leverage_rule']={'metric':'Total liabilities / total equity',
                                         'maximum':cfg['max_debt_equity'],
                                         'value':research.get('quality',{}).get('debt_equity')}
@@ -265,7 +267,8 @@ def scan(morning=False,lock_owned=False):
                 if not(sw or puts):
                     detail['outcome']='No qualifying swing or put';continue
                 dates=[datetime.fromisoformat(e['date']).date() for e in research['earnings'] if e.get('date')]
-                if any(d<=today+timedelta(days=14+cfg['earnings_buffer_days']) for d in dates):sw=None
+                detail['earnings_clear_for_swing']=not any(d<=today+timedelta(days=14+cfg['earnings_buffer_days']) for d in dates)
+                if not detail['earnings_clear_for_swing']:sw=None
                 puts=[c for c in puts if not any(d<=datetime.fromisoformat(c['expiry']).date()+timedelta(days=cfg['earnings_buffer_days']) for d in dates)]
                 if not(sw or puts):
                     detail['outcome']='Earnings exclusion';continue
@@ -294,6 +297,10 @@ def scan(morning=False,lock_owned=False):
                 if detail['outcome']!='Qualified before final freshness and result limit':detail['swing_blockers'].append(detail['outcome'])
                 for item in state['golden_zones']:
                     if item['symbol']==symbol:item.update(swing_stage=detail['swing_stage'],swing_blockers=detail['swing_blockers'],legacy_demand_confirmed=detail.get('put_demand_pass',False),volume_comparison=detail.get('volume_comparison',{}))
+                for item in state['golden_zones']:
+                    if item['symbol']==symbol and item.get('entry_plan'):
+                        item['entry_plan']['financial_status']=('Passed' if detail['financial_checks_passed'] else 'Failed') if 'financial_checks_passed' in detail else 'Unavailable' if detail.get('fundamental_rejections') else 'Not evaluated'
+                        item['entry_plan']['earnings_status']=('No event returned in screened window; recheck calendar' if detail['earnings_clear_for_swing'] else 'Blocked by earnings window') if 'earnings_clear_for_swing' in detail else 'Not evaluated'
                 state['scanned']+=1;save('state',state)
         state['rows']=[r for r in state['rows'] if research_mode or (0<=time.time()-datetime.fromisoformat(r['quote_at']).timestamp()<=900 and (not r['put'] or 0<=time.time()-r['put']['quote_timestamp']<=900))]
         state['rows']=sorted(state['rows'],key=lambda x:x['score'],reverse=True)[:cfg['max_results']]
