@@ -83,7 +83,10 @@ class Schwab:
             result.append({'symbol':symbol,'description':item.get('reference',{}).get('description',symbol),'last':q.get('lastPrice'),'volume':q.get('totalVolume'),'trade_date':q.get('tradeTime')})
         return result
     def days(self,symbol,today):
-        raw=self.get('pricehistory',symbol=market_symbol(symbol),periodType='year',period=2,frequencyType='daily',frequency=1,needExtendedHoursData='false')
+        # Without endDate the provider defaults to the prior trading day.
+        now=datetime.now(NY)
+        raw=self.get('pricehistory',symbol=market_symbol(symbol),periodType='year',frequencyType='daily',frequency=1,
+                     startDate=int((now-timedelta(days=730)).timestamp()*1000),endDate=int(now.timestamp()*1000),needExtendedHoursData='false')
         rows=[]
         for c in raw.get('candles',[]):
             d=datetime.fromtimestamp(c['datetime']/1000,NY).date()
