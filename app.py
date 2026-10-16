@@ -14,7 +14,7 @@ from provider import Data,FundamentalDataError
 from broker import validate_snapshot,portfolio_status
 from engine import indicators,swing,put_candidate,fundamental_gate,demand_zone,demand_watch_candidate
 from pullback import pullback_zone
-BUILD='daily-history-end-date-2026-10-15'
+BUILD='bounded-sec-memory-2026-10-15'
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 logger=logging.getLogger('stockdesk')
 from valuation import validate_model,estimate
@@ -557,7 +557,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:self.respond({'error':'Invalid settings. Use positive numbers, delta below 1, R/R ≥2, and a result limit of 1–50.'},400)
             return
         self.send_error(404)
+def recover_interrupted_scan():
+    state=get('state',{})
+    active=state.get('status','')
+    if active=='Scanning' or active.startswith('Loading table metadata') or active.startswith('Loading automatic valuations'):
+        state['status']='Scan interrupted by server restart · run screen again'
+        state['completed_at']=None
+        state.setdefault('errors',[]).append({'reason':'Server restarted before scan completion. Displayed partial results require a new scan.'})
+        save('state',state)
+        logger.warning('Recovered interrupted scan after server restart')
+
 if __name__=='__main__':
+    recover_interrupted_scan()
     threading.Thread(target=tradingview_worker,daemon=True).start()
     threading.Thread(target=live_import.worker,args=(conn,get,save,Schwab),daemon=True).start()
     threading.Thread(target=agent,daemon=True).start()

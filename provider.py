@@ -54,7 +54,7 @@ class Data:
         try:
             payload=self.fh('stock/financials-reported',symbol=symbol,freq='annual')
             if not hasattr(self,'_annual_reports'):self._annual_reports={}
-            self._annual_reports[symbol]=payload
+            self._annual_reports[symbol]={'cik':payload.get('cik')} if isinstance(payload,dict) else {}
             return parse_annual_quality(payload,today)
         except (ValueError,requests.RequestException) as original:
             if symbol!='DE':raise
