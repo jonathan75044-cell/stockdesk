@@ -1,16 +1,42 @@
 // Read-only discovery list; never promotes a candidate into trade eligibility.
 const zonePanel=document.createElement('section');zonePanel.className='panel card';
-zonePanel.innerHTML='<h2>Swing pullback watchlist · days to weeks</h2><p>Discovery: 38.2%–61.8% · Priority golden zone: 50%–61.8%. Dated recent daily swing anchors, not 52-week extremes. Independent of fundamental eligibility; membership is not an entry signal.</p><label><input id="golden-only" type="checkbox" checked> Show priority 50%–61.8% only</label><p id="zone-status"></p><div class="tablewrap"><table><thead><tr><th>Stock</th><th>Price</th><th>Retracement</th><th>50%–61.8% band</th><th>Anchor dates</th><th>Evidence / status</th></tr></thead><tbody id="zone-rows"></tbody></table></div>';
+zonePanel.innerHTML='<h2>Swing pullback watchlist · days to weeks</h2><p>Discovery: 38.2%–61.8% · Priority golden zone: 50%–61.8%. Dated recent daily swing anchors, not 52-week extremes. Independent of fundamental eligibility; membership is not an entry signal.</p><label><input id="golden-only" type="checkbox" checked> Show priority 50%–61.8% only</label><p id="zone-status"></p><p>Optional hypothetical sizing: <label>Cash budget ($) <input id="plan-cash" type="number" min="0" step="any" placeholder="Enter budget"></label> <label>Maximum planned loss ($) <input id="plan-risk" type="number" min="0" step="any" placeholder="Enter risk limit"></label></p><div class="tablewrap"><table><thead><tr><th>Stock</th><th>Price</th><th>Retracement</th><th>50%–61.8% band</th><th>Anchor dates</th><th>Evidence / status</th><th>Entry plan / chart</th></tr></thead><tbody id="zone-rows"></tbody></table></div>';
 document.querySelector('#desk .reports').before(zonePanel);
 function renderZones(){
  const rows=(state.golden_zones||[]).filter(r=>!document.getElementById('golden-only').checked||r.priority).sort((a,b)=>Number(b.priority)-Number(a.priority)||a.symbol.localeCompare(b.symbol));
- document.getElementById('zone-status').textContent=(state.stale?'STALE / INCOMPLETE — ':'')+rows.length+' zone candidates. No ranking of best trades without a complete entry plan.';
+ document.getElementById('zone-status').textContent=(state.stale?'STALE / INCOMPLETE — ':'')+rows.length+' zone candidates. Conditional plans are research only; pending checks must pass before entry.';
  const body=document.getElementById('zone-rows');body.replaceChildren();
  for(const r of rows){const tr=document.createElement('tr');const quoteFresh=Date.now()-Date.parse(r.quote_at)>=0&&Date.now()-Date.parse(r.quote_at)<=900000;
  const qualified=state.rows.find(x=>x.symbol===r.symbol&&x.swing);
  for(const value of [r.symbol,money(r.price),(100*r.retracement).toFixed(1)+'%',money(r.zone_low)+' – '+money(r.priority_high),r.low_date+' → '+r.high_date,
  (state.research_only?'Closing data research · live checks pending':state.stale||!quoteFresh?'Fresh review required':qualified?'Meets trade checks':r.swing_stage||'In zone · awaiting confirmation')+' · '+(r.swing_blockers||[]).join('; ')+' · '+r.source+' · quote '+r.quote_at]){const td=document.createElement('td');td.textContent=value;tr.append(td)}
- tr.title=r.method;body.append(tr);}
+ const actions=document.createElement('td');
+ const chart=document.createElement('a');chart.href=tradingViewLink(r.symbol);chart.target='_blank';chart.rel='noopener noreferrer';chart.textContent='View in TradingView';actions.append(chart);
+ const button=document.createElement('button');button.type='button';button.textContent=openPlans.has(r.symbol)?'Hide entry plan':'View entry plan';button.setAttribute('aria-expanded',String(openPlans.has(r.symbol)));button.onclick=()=>{if(openPlans.has(r.symbol))openPlans.delete(r.symbol);else openPlans.add(r.symbol);renderZones()};
+ actions.append(document.createElement('br'),button);tr.append(actions);tr.title=r.method;body.append(tr);
+ if(openPlans.has(r.symbol)){const expanded=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.style.whiteSpace='normal';cell.innerHTML=entryPlanMarkup(r);expanded.append(cell);body.append(expanded)}
+ }
+
 }
 const renderBeforeZones=renderRows;renderRows=function(){renderBeforeZones();renderZones()};
 document.getElementById('golden-only').onchange=renderZones;
+
+const openPlans=new Set();
+function tradingViewLink(symbol){return 'https://www.tradingview.com/chart/?symbol='+encodeURIComponent(symbol)}
+function hypotheticalPlanSize(plan,cash,riskBudget){
+ if(!Number.isFinite(cash)||!Number.isFinite(riskBudget)||cash<=0||riskBudget<=0||!Number.isFinite(plan.entry)||plan.entry<=0||!Number.isFinite(plan.risk_per_share)||plan.risk_per_share<=0)return null;
+ const shares=Math.floor(Math.min(cash/plan.entry,riskBudget/plan.risk_per_share));
+ return {shares,cost:shares*plan.entry,plannedRisk:shares*plan.risk_per_share};
+}
+function entryPlanMarkup(row){
+ const p=row.entry_plan;
+ if(!p)return '<p>No saved entry plan. Run a fresh scan after deployment to generate one.</p>';
+ const cash=Number(document.getElementById('plan-cash').value),risk=Number(document.getElementById('plan-risk').value);
+ const size=hypotheticalPlanSize(p,cash,risk);
+ const freshQuote=Date.now()-Date.parse(row.quote_at)>=0&&Date.now()-Date.parse(row.quote_at)<=900000;
+ const status=state.stale?'STALE — refresh before using these levels':state.research_only?'After-hours research — live checks pending':!freshQuote?'Quote expired — refresh before using these levels':'Conditional plan — verify all checks';
+ const values=[['Planning entry (not an order)',money(p.entry)],['Stop reference',p.stop==null?'Unavailable':money(p.stop)],['First historical target',p.target1==null?'Unavailable':money(p.target1)],['Second historical target',p.target2==null?'Unavailable':money(p.target2)],['Risk per share',p.risk_per_share==null?'Unavailable':money(p.risk_per_share)],['First-target reward / risk',p.reward_risk==null?'Unavailable':p.reward_risk.toFixed(2)+':1 (minimum '+p.minimum_rr+':1)'],['Entry ceiling for minimum reward / risk',p.max_entry_for_rr==null?'Unavailable':money(p.max_entry_for_rr)],['Average daily volume',Number(p.average_volume).toLocaleString()+' / minimum '+Number(p.minimum_average_volume).toLocaleString()],['Relative volume',p.relative_volume+'× / minimum '+p.minimum_relative_volume+'×'],['Financial checks',p.financial_status],['Earnings check',p.earnings_status]];
+ return '<h3>'+esc(row.symbol)+' · conditional entry plan</h3><p><strong>'+esc(status)+'</strong></p><p>Daily bars through '+esc(p.data_date)+'. Plan is not a qualification or buy signal.</p><p>'+esc(p.trigger)+'</p><dl>'+values.map(([label,value])=>'<dt>'+esc(label)+'</dt><dd>'+esc(value)+'</dd>').join('')+'</dl><ul>'+p.checks.map(check=>'<li>'+esc((check.passed?'Pass: ':'Pending / failed: ')+check.name)+'</li>').join('')+'</ul><p>Valuation: separate review required; this plan does not establish undervaluation.</p><p>'+esc((row.swing_blockers||[]).join('; '))+'</p><p>'+esc(p.invalidation)+'</p><p>'+esc(p.method)+'</p><p>'+(size?'Hypothetical size: '+size.shares+' shares · cost '+money(size.cost)+' · planned stop loss '+money(size.plannedRisk)+'. Fees and gaps are excluded; actual loss can exceed this amount.':'Enter your cash budget and maximum planned loss above to calculate hypothetical shares.')+'</p><p><a target="_blank" rel="noopener noreferrer" href="'+esc(tradingViewLink(row.symbol))+'">View in TradingView</a> · Confirm the ticker and exchange on the chart.</p>';
+}
+document.getElementById('plan-cash').oninput=renderZones;
+document.getElementById('plan-risk').oninput=renderZones;
