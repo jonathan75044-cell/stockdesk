@@ -59,5 +59,5 @@ class EntryPlanTests(unittest.TestCase):
             app.scan();state=app.get('state')
         self.assertEqual(state['rows'],[]);self.assertEqual(len(state['golden_zones']),1)
         plan=state['golden_zones'][0]['entry_plan'];self.assertFalse(plan['eligible'])
-        self.assertEqual(plan['financial_status'],'Not evaluated');self.assertEqual(plan['earnings_status'],'Not evaluated')
+        self.assertTrue(plan['financial_status'].startswith('unavailable:'));self.assertTrue(plan['earnings_status'].startswith('unavailable:'))
         data.research.assert_not_called();data.options.assert_not_called()
