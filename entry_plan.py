@@ -1,6 +1,7 @@
 """Conditional watchlist plans. Never changes trade eligibility or submits orders."""
 import math
 from resistance import resistance_levels
+from setup_checklist import trend_checks
 
 
 def swing_entry_plan(price,days,metrics,zone,cfg):
@@ -9,7 +10,7 @@ def swing_entry_plan(price,days,metrics,zone,cfg):
     floor_cent=lambda n:math.floor(n*100+1e-9)/100
     reversal=('open' in last and float(last['close'])>float(last['open'])
               and float(last['close'])>float(prev['high']))
-    threshold=float(prev['high'] if reversal else last['high'])
+    threshold=float(last['high'])
     entry=ceil_cent(max(price,threshold+.01))
     stop=floor_cent(min(float(b['low']) for b in days[-5:])-.1*atr)
     risk=entry-stop
@@ -41,9 +42,10 @@ def swing_entry_plan(price,days,metrics,zone,cfg):
             'trigger':('Reversal is present in the latest completed bar. Recheck a live price above '+str(round(threshold,2))+'.'
                        if reversal else 'Wait for a NEW completed daily bar to close above '+str(round(threshold,2))+' and above its own open; then rescan. These levels must be recalculated.'),
             'checks':[{'name':name,'passed':bool(passed)} for name,passed in checks],
+            'preferred_checks':trend_checks(price,days)+[{'name':'Break above completed reversal candle high','passed':bool(reversal and price>float(last['high']))}],
             'average_volume':round(metrics['avgvol']),'minimum_average_volume':cfg['min_avg_volume'],
             'relative_volume':round(metrics['rvol'],3),'minimum_relative_volume':cfg['swing_min_rvol'],
             'financial_status':'Not evaluated','earnings_status':'Not evaluated',
-            'method':'Planning entry: higher of snapshot price or confirmation threshold plus $0.01, rounded up. Stop: lowest of five completed daily lows minus 0.1 ATR, rounded down. Targets: confirmed 2-left/2-right swing highs within 90 completed bars; nearest above entry first, second at least 0.5 ATR higher. Nearby daily highs remain overhead obstacles.',
+            'method':'Planning entry: higher of snapshot price or latest completed candle high plus $0.01, rounded up. Stop: lowest of five completed daily lows minus 0.1 ATR, rounded down. Targets: confirmed 2-left/2-right swing highs within 90 completed bars; nearest above entry first, second at least 0.5 ATR higher. Nearby daily highs remain overhead obstacles.',
             'invalidation':'Rebuild after a new daily bar, a support break, or a price gap. Skip if first-target reward/risk is below the configured minimum. Stops can fill below the planned level.',
             'eligible':False}

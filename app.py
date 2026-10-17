@@ -1,3 +1,4 @@
+from setup_checklist import assess_setup
 from watchlist_research import enrich_watchlists
 from market_context import load_market_context, relative_strength
 import live_import
@@ -135,6 +136,8 @@ def status():
     state['notification_configured']=bool(os.getenv('ALERT_WEBHOOK_URL'))
     state['morning_digest']=get('morning_digest');state['config']=active_config;state['alerts']=get('alerts',[])[-30:]
     state['stale']=not state.get('completed_at') or (datetime.now(timezone.utc)-datetime.fromisoformat(state['completed_at'])).total_seconds()>4200
+    for item in state.get('golden_zones',[]):
+        item['setup_assessment']=assess_setup(item,state)
     return state
 
 
