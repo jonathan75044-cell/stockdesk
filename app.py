@@ -68,6 +68,13 @@ def config():
             if previous.get('diagnostics'):save('previous_scan',previous)
             save('state',dict(status=previous.get('status','Awaiting fresh scan'),rows=[],watchlist=[],golden_zones=[],completed_at=None,started_at=None,scanned=0,total=0,diagnostics=[],errors=[]))
         save('scan_state_version',1)
+    if get('put_setup_rules_version')!=1:
+        saved.update(put_dte_min=7,put_dte_max=45)
+        save('config',saved)
+        save('previous_scan',get('state',{}))
+        save('state',dict(status='Put expiration range updated · run a fresh scan',rows=[],watchlist=[],golden_zones=[],completed_at=None,started_at=None,scanned=0,total=0,diagnostics=[],errors=[]))
+        save('morning_digest',None);save('latest_review',None)
+        save('put_setup_rules_version',1)
     result={**defaults,**saved}
     result['universe']=' '.join(canonical_universe(result['universe']))
     return result
@@ -472,7 +479,7 @@ class Handler(BaseHTTPRequestHandler):
             raw=(ROOT/'journal.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
-        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js','/put_display.js','/strategy_summary.js'):
+        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js','/put_display.js','/put_setup_ui.js','/strategy_summary.js'):
             raw=(ROOT/path[1:]).read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/':self.send_error(404);return
         raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a><a href="/diagnostics" style="margin:0 18px;color:inherit">Scan diagnostics</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)

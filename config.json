@@ -4,7 +4,7 @@
   "cash_per_position": 10000,
   "min_price": 10,
   "min_avg_volume": 5000000,
-  "put_dte_min": 21,
+  "put_dte_min": 7,
   "put_dte_max": 45,
   "put_delta_min": 0.2,
   "put_delta_max": 0.3,
