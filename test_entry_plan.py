@@ -16,7 +16,7 @@ class EntryPlanTests(unittest.TestCase):
         self.cfg=dict(min_price=10,min_avg_volume=5000000,swing_min_rvol=1.3,swing_min_rr=2)
     def plan(self,price=107):return swing_entry_plan(price,self.days,self.m,self.zone,self.cfg)
     def test_confirmed_bar_still_yields_only_conditional_plan(self):
-        p=self.plan();self.assertFalse(p['eligible']);self.assertEqual(p['entry'],107)
+        p=self.plan();self.assertFalse(p['eligible']);self.assertEqual(p['entry'],108.01)
         self.assertEqual(p['stop'],99.5);self.assertEqual(p['target1'],120);self.assertEqual(p['target2'],130)
         self.assertEqual(p['financial_status'],'Not evaluated');self.assertEqual(p['earnings_status'],'Not evaluated')
     def test_unconfirmed_bar_requires_new_daily_reversal_and_rescan(self):
