@@ -1,3 +1,4 @@
+from watchlist_research import enrich_watchlists
 from market_context import load_market_context, relative_strength
 import live_import
 import os,json,time,threading,hashlib,hmac,base64,sqlite3,secrets,math,logging
@@ -112,7 +113,7 @@ def status():
         review['eligible_contract_count']=sum(o['trade_eligible'] for o in review.get('options',[]))
     state['decision_preferences']=get('decision_preferences',json.loads((ROOT/'decision_defaults.json').read_text()))
     valuation_today=datetime.now(ZoneInfo('America/New_York')).date()
-    for item in state.get('rows',[])+state.get('watchlist',[]):
+    for item in state.get('rows',[])+state.get('watchlist',[])+state.get('golden_zones',[]):
         review=get('review:'+item['symbol'],{})
         cached_auto=get('automatic_valuation:'+item['symbol'],{})
         automatic=cached_auto.get('value') or state.get('automatic_valuations',{}).get(item['symbol']) or (review.get('valuation',{}) if review.get('valuation',{}).get('input_source')=='Automatic SEC evidence' else {})
@@ -319,6 +320,9 @@ def scan(morning=False,lock_owned=False):
         state['watchlist']=sorted([w for w in state['watchlist'] if
             research_mode or 0<=time.time()-datetime.fromisoformat(w['quote_at']).timestamp()<=900],
             key=lambda w:(w['distance_atr'],w['symbol']))[:cfg['max_results']]
+        state['status']='Reviewing watchlist financials and earnings';save('state',state)
+        enrich_watchlists(state,data,cfg,today,get,save)
+        save('state',state)
         # Enrich displayed tables only; these fields are never screening gates.
         state['status']='Loading table metadata';save('state',state)
         metadata_deadline=time.monotonic()+120
@@ -338,7 +342,7 @@ def scan(morning=False,lock_owned=False):
         # Extra display requests must not extend the freshness of trade quotes.
         state['status']='Loading automatic valuations';state['automatic_valuations']={};save('state',state)
         auto_deadline=time.monotonic()+90
-        valuation_items=state['rows']+state['watchlist']
+        valuation_items=list({item['symbol']:item for item in state['rows']+state['golden_zones']+state['watchlist']}.values())
         for valuation_index,item in enumerate(valuation_items,1):
             state['status']='Loading automatic valuations · '+str(valuation_index)+'/'+str(len(valuation_items))+' · '+item['symbol'];save('state',state)
             if item['symbol'] in get('valuation_models',{}):continue
