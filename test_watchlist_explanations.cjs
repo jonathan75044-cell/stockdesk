@@ -1,0 +1,15 @@
+const assert=require('node:assert/strict');
+const {explainWatchlists:explain}=require('./watchlist_explanations');
+assert.match(explain({},'BMY').golden,/Not evaluated/);
+const d={symbol:'NVDA',pullback:{in_zone:true,priority:false,retracement:.45,low_date:'2026-07-01',high_date:'2026-10-01',last_bar_date:'2026-10-16'}};
+const s={diagnostics:[d]};
+assert.match(explain(s,'NVDA').golden,/hidden/);
+assert.match(explain(s,'NVDA',false).golden,/Included/);
+d.pullback.in_zone=false;assert.match(explain(s,'NVDA').golden,/Outside/);
+d.pullback=null;assert.match(explain(s,'NVDA').golden,/No qualifying/);
+delete d.pullback;assert.match(explain(s,'NVDA').golden,/Not evaluated/);
+d.put_demand_pass=true;assert.match(explain(s,'NVDA').demand,/already confirmed/);
+d.put_demand_pass=false;d.demand_rejections=['Too far above demand'];assert.match(explain(s,'NVDA').demand,/Too far/);
+s.watchlist=[{symbol:'NVDA',distance_atr:1.2}];assert.match(explain(s,'NVDA').demand,/Included/);
+s.watchlist=[];d.watchlist={};assert.match(explain(s,'NVDA').demand,/result-limit/);
+console.log('10 watchlist explanation assertions passed.');
