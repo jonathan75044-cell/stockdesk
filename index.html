@@ -38,7 +38,7 @@ async function loadPortfolio(){
 </script>
 <script>
 const watchPanel=document.createElement('section');watchPanel.className='panel card';
-const watchTitle=document.createElement('h2');watchTitle.textContent='Watchlist · awaiting demand confirmation';
+const watchTitle=document.createElement('h2');watchTitle.textContent='Near-demand watchlist · awaiting bullish retest';
 const watchNote=document.createElement('p');watchNote.className='note';watchNote.textContent='Research only. These stocks have an intact pivot within the configured distance but lack a recent bullish retest. The main screen stopped at demand confirmation. Use Review to inspect fundamentals, trend, earnings and contracts separately.';
 const watchStatus=document.createElement('p');
 const watchTable=document.createElement('table');
@@ -84,6 +84,6 @@ detail=function(sym){detailWithEvidence(sym);const item=state.rows.find(r=>r.sym
 <script src="/pullback_ui.js"></script>
 <script src="/put_display.js"></script>
 <script src="/put_setup_ui.js"></script>
-<script src="/strategy_summary.js"></script>
+<script src="/strategy_summary.js"></script><script src="/watchlist_explanations.js"></script>
 </html>
 
