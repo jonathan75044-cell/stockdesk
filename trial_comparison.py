@@ -1,7 +1,25 @@
 """Read-only shadow assessment; no changes to ranking, alerts, or eligibility."""
+import copy
 from datetime import datetime, timezone
-from revised_swing import technical, assess, DEFAULTS
+from revised_swing import technical, assess, DEFAULTS, finite
 from market_context import relative_strength
+
+
+def sma200_context(days, price):
+    """Completed-bar average; five-session direction is informational only."""
+    result=dict(value=None, distance_pct=None, direction='Unknown', above=None,
+                data_date=days[-1]['date'] if days else None, bars=len(days))
+    closes=[d.get('close') for d in days[-205:]]
+    if len(closes)<200 or not all(finite(x) and x>0 for x in closes[-200:]):
+        return result
+    average=sum(closes[-200:])/200
+    result['value']=average
+    if finite(price) and price>0:
+        result.update(above=price>average, distance_pct=(price/average-1)*100)
+    if len(closes)>=205 and all(finite(x) and x>0 for x in closes):
+        previous=sum(closes[-205:-5])/200
+        result['direction']='Rising' if average>previous else 'Falling' if average<previous else 'Flat'
+    return result
 
 
 def capture_trial(days, price, quote_at, context, cfg):
@@ -16,7 +34,7 @@ def capture_trial(days, price, quote_at, context, cfg):
         b=context.get(symbol,{});r=relative.get(symbol,{})
         if b.get('available') and b.get('freshness')!='Latest completed session missing' and r.get('available'):
             benchmarks[symbol]=dict(source='Schwab completed daily bars',data_date=b['data_date'],trend=b['trend'],relative_strength_pp=r['difference_pp'])
-    return dict(plan=plan,price=price,quote_at=quote_at,data_date=days[-1]['date'],config=settings,benchmarks=benchmarks)
+    return dict(sma200=sma200_context(days,price),plan=plan,price=price,quote_at=quote_at,data_date=days[-1]['date'],config=settings,benchmarks=benchmarks)
 
 
 def comparison_rows(state, now=None):
@@ -46,6 +64,14 @@ def comparison_rows(state, now=None):
                 row['trial']=assess(case,captured['plan'])
                 row['trial']['data_date']=captured['data_date']
                 row['trial']['quote_at']=captured['quote_at']
+                context=captured.get('sma200',{})
+                row['sma200']=context
+                filtered=copy.deepcopy(captured['plan'])
+                above=context.get('above')
+                filtered['checks'].append(dict(stage='watch',name='Price above 200-day average',
+                    status='pass' if above is True else 'fail' if above is False else 'unknown',
+                    detail='Scan price must be strictly above the average of 200 completed daily closes. Direction is informational.' if context else 'Run a new scan to collect 200-day evidence.'))
+                row['trial_with_sma200']=assess(case,filtered)
             except (KeyError,ValueError,TypeError) as error:
                 row['reason']='Trial evidence unavailable: '+str(error)
         result.append(row)
