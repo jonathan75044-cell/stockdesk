@@ -76,3 +76,18 @@ def comparison_rows(state, now=None):
                 row['reason']='Trial evidence unavailable: '+str(error)
         result.append(row)
     return result
+
+
+def top_comparisons(state, now=None):
+    members=set(state.get('sp500_universe',[]))
+    rows=[r for r in comparison_rows(state,now) if r['symbol'] in members]
+    stages={'All required checks passed':3,'Ready to review':2,'Watch':1}
+    def key(row):
+        base=row.get('trial') or {};filtered=row.get('trial_with_sma200') or {}
+        a=stages.get(base.get('stage'),0);b=stages.get(filtered.get('stage'),0)
+        checks=base.get('checks',[])
+        passed=sum(c['status']=='pass' for c in checks)
+        return (-max(a,b),-b,-passed,row['symbol'])
+    rows.sort(key=key)
+    for rank,row in enumerate(rows[:25],1):row['rank']=rank
+    return rows[:25]

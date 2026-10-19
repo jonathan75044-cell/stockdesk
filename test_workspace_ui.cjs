@@ -1,0 +1,28 @@
+const {chromium}=require('playwright');
+const fs=require('fs'),path=require('path'),assert=require('assert');
+(async()=>{
+ const browser=await chromium.launch({headless:true,channel:'chrome'});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.route('http://stockdesk.test/**',async route=>{
+  const file=new URL(route.request().url()).pathname;
+  if(file==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync('index.html','utf8')});
+  if(file.endsWith('.js'))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(process.cwd(),file.slice(1)),'utf8')});
+  return route.fulfill({contentType:'application/json',body:'{}'});
+ });
+ await page.goto('http://stockdesk.test/');
+ await page.getByRole('button',{name:'Watchlists & trial rules',exact:true}).click();
+ await page.getByRole('tab',{name:'Golden-zone watchlist',exact:true}).click();
+ assert(await page.locator('#watch-page-1').isVisible());assert(!(await page.locator('#watch-page-0').isVisible()));
+ await page.getByRole('tab',{name:'Current rules vs. Trial rules',exact:true}).click();
+ assert(await page.locator('#watch-page-2').isVisible());
+ await page.getByRole('button',{name:/Opportunities/}).click();
+ assert(!(await page.locator('#watch-workspace').isVisible()));
+ await page.getByRole('button',{name:'Current rules vs. Trial rules',exact:true}).click();
+ assert(await page.locator('#watch-page-2').isVisible());
+ await page.evaluate(()=>{state={completed_at:'2026-10-19',sp500_retrieved:'2026-10-19',sp500_universe:['NVDA'],trial_comparison:[{rank:1,symbol:'NVDA',current:'Trial only',trial:{stage:'Watch',checks:[],data_date:'2026-10-16',quote_at:'2026-10-19',entry:100,stop:95,target:110,effective_target:110,reward_risk:2},trial_with_sma200:{stage:'Watch',checks:[]},sma200:{value:90,above:true,distance_pct:11.11,direction:'Rising',data_date:'2026-10-16'}}]};renderTrialComparison()});
+ assert((await page.locator('#trial-compare-rows').innerText()).includes('1. NVDA'));
+ assert((await page.locator('#trial-compare-rows').innerText()).includes('Rising'));
+ const reason=await page.evaluate(()=>explainRanked({diagnostics:[{outcome:'Earnings exclusion'},{outcome:'Trial only',trial_only:true}]}));
+ assert(reason.includes('1 Earnings exclusion'));assert(!reason.includes('1 Trial only'));
+ assert.deepEqual(errors,[]);await browser.close();console.log('Workspace tabs, navigation shortcut, preserved panels and empty ranking explanation passed.');
+})().catch(e=>{console.error(e);process.exit(1)});

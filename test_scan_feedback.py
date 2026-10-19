@@ -8,7 +8,7 @@ class ScanFeedback(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.db=patch.object(app,'DB',Path(self.temp.name)/'test.db');self.db.start()
         self.lock=patch.object(app,'lock',threading.Lock());self.lock.start()
-        app.save('rules_version',5);app.save('scan_state_version',1);app.save('resistance_rules_version',1)
+        app.save('put_setup_rules_version',1);app.save('rules_version',5);app.save('scan_state_version',1);app.save('resistance_rules_version',1)
     def tearDown(self):
         self.lock.stop();self.db.stop();self.temp.cleanup()
     def test_closed_starts_research_and_preserves_results_until_worker_runs(self):
@@ -58,7 +58,7 @@ class AfterHoursScan(ScanFeedback):
         data.display_metadata.return_value={}
         data.quotes.return_value=[{'last':999,'trade_date':0}]
         cfg=app.config();cfg.update(universe='TEST',notifications_enabled=True)
-        with patch.object(app,'Data',return_value=data),patch.object(app,'config',return_value=cfg),patch.object(app,'indicators',return_value={'atr':2,'avgvol':6000000,'ma20':95,'ma50':90}),patch.object(app,'pullback_zone',return_value=None),patch.object(app,'demand_zone',return_value=None),patch.object(app,'demand_watch_candidate',return_value=None),patch.object(app,'swing',return_value={'score':5,'rr':2}),patch.object(app,'fundamental_gate',return_value={'pass':True}),patch.dict(app.os.environ,{'SEC_USER_AGENT':'','ALERT_WEBHOOK_URL':'https://example.invalid'}),patch.object(app.requests,'post') as post:
+        with patch.object(app,'scan_universe',return_value=(['TRIAL','TEST'],{'TEST'},['TRIAL','TEST'])),patch.object(app,'Data',return_value=data),patch.object(app,'config',return_value=cfg),patch.object(app,'indicators',return_value={'atr':2,'avgvol':6000000,'ma20':95,'ma50':90}),patch.object(app,'pullback_zone',return_value=None),patch.object(app,'demand_zone',return_value=None),patch.object(app,'demand_watch_candidate',return_value=None),patch.object(app,'swing',return_value={'score':5,'rr':2}),patch.object(app,'fundamental_gate',return_value={'pass':True}),patch.dict(app.os.environ,{'SEC_USER_AGENT':'','ALERT_WEBHOOK_URL':'https://example.invalid'}),patch.object(app.requests,'post') as post:
             app.scan()
             post.assert_not_called()
         return app.get('state'),data,today
@@ -72,6 +72,13 @@ class AfterHoursScan(ScanFeedback):
         data.days.assert_any_call('TEST',today+app.timedelta(days=1))
         data.days.assert_any_call('SPY',today+app.timedelta(days=1))
         data.days.assert_any_call('QQQ',today+app.timedelta(days=1))
+    def test_trial_only_symbols_do_not_enter_live_screen(self):
+        state,data,today=self.run_scan(age=1)
+        self.assertEqual(state['total'],2)
+        self.assertEqual([r['symbol'] for r in state['rows']],['TEST'])
+        trial=next(d for d in state['diagnostics'] if d['symbol']=='TRIAL')
+        self.assertTrue(trial['trial_only']);self.assertEqual(trial['outcome'],'S&P 500 trial comparison only')
+        self.assertTrue(all(c.args[0]!='TRIAL' for c in data.research.call_args_list))
     def test_preopen_excludes_current_day(self):
         state,data,today=self.run_scan(completed=False,age=1)
         data.days.assert_any_call('TEST',today)
