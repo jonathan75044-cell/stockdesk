@@ -1,3 +1,4 @@
+from trial_comparison import capture_trial, comparison_rows
 from setup_checklist import assess_setup
 from watchlist_research import enrich_watchlists
 from market_context import load_market_context, relative_strength
@@ -145,6 +146,7 @@ def status():
     state['stale']=not state.get('completed_at') or (datetime.now(timezone.utc)-datetime.fromisoformat(state['completed_at'])).total_seconds()>4200
     for item in state.get('golden_zones',[]):
         item['setup_assessment']=assess_setup(item,state)
+    state['trial_comparison']=comparison_rows(state)
     return state
 
 
@@ -235,6 +237,10 @@ def scan(morning=False,lock_owned=False):
                     q=data.quotes([symbol])[0];ts=float(q['trade_date'])/1000
                     if abs(time.time()-ts)>900:raise ValueError('Stale underlying quote')
                     price=float(q['last'])
+                try:
+                    detail['trial_capture']=capture_trial(days,price,datetime.fromtimestamp(ts,timezone.utc).isoformat(),state['market_context'],cfg)
+                except Exception as trial_error:
+                    detail['trial_error']='Trial calculation unavailable: '+str(trial_error)[:200]
                 m=indicators(days)
                 pullback=pullback_zone(price,days,m['atr'])
                 detail['pullback']=pullback
@@ -479,7 +485,7 @@ class Handler(BaseHTTPRequestHandler):
             raw=(ROOT/'journal.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path=='/api/portfolio':self.respond(portfolio_status(get('ibkr_portfolio')));return
         if self.path=='/api/state':self.respond(status());return
-        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js','/put_display.js','/put_setup_ui.js','/strategy_summary.js','/watchlist_explanations.js'):
+        if path in ('/review_ui.js','/confirmation_ui.js','/pullback_ui.js','/put_display.js','/put_setup_ui.js','/strategy_summary.js','/watchlist_explanations.js','/trial_comparison_ui.js'):
             raw=(ROOT/path[1:]).read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/':self.send_error(404);return
         raw=(ROOT/'index.html').read_bytes().replace(b'</header>',b'<a href="/journal" style="margin:0 18px;color:inherit">Trade journal</a><a href="/diagnostics" style="margin:0 18px;color:inherit">Scan diagnostics</a></header>',1);self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw)

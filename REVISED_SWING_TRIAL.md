@@ -1,6 +1,14 @@
 # Revised swing checklist — offline trial
 
-This trial is deliberately **not connected to the live dashboard, scanner, configuration, alerts, or orders**. Merging these files does not switch live trading rules. It evaluates supplied evidence and returns an experimental assessment with `trade_eligible: false`, even when all trial checks pass.
+This trial is connected to a **read-only dashboard comparison**, but not to live ranking, configuration changes, alerts, or orders. Merging these files does not switch live trading rules. It evaluates evidence and returns an experimental assessment with `trade_eligible: false`, even when all trial checks pass.
+
+## Dashboard comparison
+
+After deployment, use **Current rules vs. Trial rules** below the main dashboard heading. Run a fresh scan once to collect compact trial evidence for each scanned symbol. Older scans show an explicit request for new evidence. Search for a symbol and expand its trial checklist to see failed/unknown checks and the conditional plan. Current ranked swing eligibility, current technical screening and the existing preferred checklist (when available) are labeled separately.
+
+The comparison reuses daily bars already fetched during the scan; it performs no extra provider requests. It retains technical summaries rather than full daily histories. Quote freshness is reassessed when dashboard state is requested. Stale or after-hours results never pass the live-quote gate. Completed same-day bars can be researched after hours, but cannot be used as completed bars during that day's open session.
+
+Supported valuations are carried over when available. Sector-specific financial review, a verified earnings calendar, and trial personal sizing inputs are not connected yet, so these gates stay unknown. No empty calendar response or generic financial pass is promoted into verified trial evidence. The panel is a comparison tool, not a claim that all trial adoption work is complete.
 
 ## Plain-language stages
 

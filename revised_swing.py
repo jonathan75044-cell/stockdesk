@@ -4,6 +4,7 @@ Run: python revised_swing.py case.json
 Input contract and limitations: REVISED_SWING_TRIAL.md.
 """
 import json
+import copy
 import math
 import sys
 from datetime import date, datetime, timedelta
@@ -101,7 +102,7 @@ DEFAULTS=dict(min_price=10,min_avg_volume=5000000,min_rr=2,min_rvol=1.3,
               holding_days=14,earnings_buffer_days=2,benchmark='SPY',round_trip_cost_per_share=.05)
 
 
-def assess(case):
+def assess(case, technical_result=None):
     config={**DEFAULTS,**case.get('config',{})}
     for name in ('min_price','min_avg_volume','min_rr','min_rvol','holding_days','earnings_buffer_days','round_trip_cost_per_share'):
         if not finite(config[name]) or config[name]<0:
@@ -111,9 +112,9 @@ def assess(case):
     if config['benchmark'] not in ('SPY','QQQ'):
         raise ValueError('Select SPY or QQQ explicitly')
     now=stamp(case['as_of']);session=case['expected_completed_session']
-    if date.fromisoformat(session)>=now.date():
+    if date.fromisoformat(session)>now.date() or (date.fromisoformat(session)==now.date() and case.get('quote',{}).get('session')=='open'):
         raise ValueError('Trial entry assessment requires prior-session completed bars')
-    result=technical(case['days'],case['price'],session,config)
+    result=copy.deepcopy(technical_result) if technical_result is not None else technical(case['days'],case['price'],session,config)
     checks=result['checks']
     def add(stage,name,value,detail):
         checks.append(dict(stage=stage,name=name,status='unknown' if value is None else 'pass' if value else 'fail',detail=detail))
