@@ -2,7 +2,7 @@ import copy
 import unittest
 from datetime import datetime,timezone
 from unittest.mock import patch
-from trial_comparison import comparison_rows,capture_trial
+from trial_comparison import comparison_rows,capture_trial,sma200_context
 from revised_swing import DEFAULTS
 
 class ComparisonTests(unittest.TestCase):
@@ -31,4 +31,37 @@ class ComparisonTests(unittest.TestCase):
   del self.state['diagnostics'][0]['trial_capture'];self.state['diagnostics'][0]['trial_error']='Invalid history';r=comparison_rows(self.state,self.now)[0];self.assertEqual(r['reason'],'Invalid history');self.assertEqual(r['current'],'Blocked')
  def test_cached_assessment_is_idempotent(self):
   self.assertEqual(comparison_rows(self.state,self.now),comparison_rows(self.state,self.now))
+
+class SMA200Tests(ComparisonTests):
+ def bars(self,n):
+  return [dict(date=str(i),close=100) for i in range(n)]
+ def test_history_boundaries(self):
+  self.assertIsNone(sma200_context(self.bars(199),101)['above'])
+  for count in (200,204):
+   c=sma200_context(self.bars(count),101);self.assertTrue(c['above']);self.assertEqual(c['direction'],'Unknown')
+  self.assertEqual(sma200_context(self.bars(205),101)['direction'],'Flat')
+ def test_price_strictly_above(self):
+  for price,above in ((99,False),(100,False),(101,True)):
+   c=sma200_context(self.bars(200),price);self.assertEqual(c['above'],above);self.assertAlmostEqual(c['distance_pct'],price-100)
+ def test_direction_uses_five_sessions(self):
+  rows=self.bars(205);rows[-1]['close']=200
+  self.assertEqual(sma200_context(rows,101)['direction'],'Rising')
+  rows[-1]['close']=50
+  self.assertEqual(sma200_context(rows,101)['direction'],'Falling')
+ def test_invalid_close_unknown(self):
+  rows=self.bars(205);rows[-1]['close']=float('nan')
+  self.assertIsNone(sma200_context(rows,101)['value'])
+ def test_filter_only_changes_trial_variant(self):
+  for above in (True,False,None):
+   self.state['diagnostics'][0]['trial_capture']['sma200']=dict(above=above,direction='Falling')
+   before=copy.deepcopy(self.state);r=comparison_rows(self.state,self.now)[0]
+   self.assertEqual(before,self.state)
+   self.assertEqual(r['trial']['stage'],'Ready to review')
+   self.assertEqual(r['trial_with_sma200']['stage'],'Ready to review' if above is True else 'Not ready for watchlist')
+   self.assertFalse(r['trial_with_sma200']['trade_eligible'])
+ def test_old_capture_unknown_filter(self):
+  r=comparison_rows(self.state,self.now)[0]
+  c=next(c for c in r['trial_with_sma200']['checks'] if c['name']=='Price above 200-day average')
+  self.assertEqual(c['status'],'unknown');self.assertIn('new scan',c['detail'])
+
 if __name__=='__main__':unittest.main()
