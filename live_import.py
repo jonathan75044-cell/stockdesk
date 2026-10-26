@@ -1,5 +1,6 @@
 """Read live Schwab transactions into a separate broker ledger; never submit orders."""
 import hashlib,json,threading,time
+from journal_profit import estimates
 from datetime import datetime,timedelta,timezone
 from urllib.parse import quote
 import requests
@@ -65,7 +66,7 @@ def sync(connect,get,save,client,reader=read_api):
 def rows(connect):
     with connect() as c:
         table(c)
-        return sorted([json.loads(r[0]) for r in c.execute('SELECT data FROM schwab_ledger')],key=lambda r:r['date'],reverse=True)
+        return estimates(sorted([json.loads(r[0]) for r in c.execute('SELECT data FROM schwab_ledger')],key=lambda r:r['date'],reverse=True))
 
 def worker(connect,get,save,client_factory):
     while True:
