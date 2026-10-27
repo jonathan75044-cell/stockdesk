@@ -6,7 +6,7 @@ from pathlib import Path
 class Rules(unittest.TestCase):
  def setUp(self):
   self.cfg=json.loads(Path(__file__).with_name('config.json').read_text());self.today=date.today()
-  self.opt={'option_type':'put','contract_size':100,'symbol':'TEST_PUT','strike':90,'bid':1,'ask':1.1,'greeks':{'delta':-.2},'open_interest':800,'expiration_date':str(self.today+timedelta(days=30)),'bid_date':time.time()*1000,'ask_date':time.time()*1000}
+  self.opt={'option_type':'put','contract_size':100,'symbol':'TEST_PUT','strike':90,'bid':1,'ask':1.1,'greeks':{'delta':-.2},'open_interest':800,'volume':100,'expiration_date':str(self.today+timedelta(days=30)),'bid_date':time.time()*1000,'ask_date':time.time()*1000}
  def test_put_economics(self):
   r=put_candidate(100,self.opt,self.cfg,self.today);self.assertEqual(r['collateral'],9000);self.assertEqual(r['max_loss'],8900);self.assertEqual(r['breakeven'],89)
  def test_stale_option_rejected(self):

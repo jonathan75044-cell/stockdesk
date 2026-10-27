@@ -77,6 +77,13 @@ def config():
         save('state',dict(status='Put expiration range updated · run a fresh scan',rows=[],watchlist=[],golden_zones=[],completed_at=None,started_at=None,scanned=0,total=0,diagnostics=[],errors=[]))
         save('morning_digest',None);save('latest_review',None)
         save('put_setup_rules_version',1)
+    if get('csp_liquidity_version')!=1:
+        saved.update(put_min_oi=500,put_preferred_oi=1000,put_min_volume=100)
+        save('config',saved)
+        previous=get('state',{})
+        previous.update(completed_at=None,status='CSP liquidity settings updated - run a fresh scan',rows=[])
+        save('state',previous);save('latest_review',None)
+        save('csp_liquidity_version',1)
     result={**defaults,**saved}
     result['universe']=' '.join(canonical_universe(result['universe']))
     return result
@@ -308,7 +315,7 @@ def scan(morning=False,lock_owned=False):
                 puts=[c for c in puts if not any(d<=datetime.fromisoformat(c['expiry']).date()+timedelta(days=cfg['earnings_buffer_days']) for d in dates)]
                 if not(sw or puts):
                     detail['outcome']='Earnings exclusion';continue
-                best=max(puts,key=lambda c:c['score']) if puts else None
+                best=max(puts,key=lambda c:(c.get('preferred_liquidity',False),c['score'])) if puts else None
                 row={'research_only':research_mode,'data_date':days[-1]['date'],'market_ready':not research_mode,'quality':quality,'demand_zone':zone,'symbol':symbol,'name':q.get('description',symbol),'price':price,'volume':q.get('volume'),'quote_at':datetime.fromtimestamp(ts,timezone.utc).isoformat(),'swing':sw,'put':best,'score':max(sw['score'] if sw else 0,best['score'] if best else 0),'research':research,'ma20':m['ma20'],'ma50':m['ma50'],'asof':stamp(),'earnings_note':'No scheduled event returned in the screened horizon; calendar may change.'}
                 state['rows'].append(row);detail['outcome']='Qualified before final freshness and result limit'
             except Exception as e:
@@ -600,6 +607,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not 1<=data['max_results']<=50 or int(data['max_results'])!=data['max_results']:raise ValueError()
                 data['max_results']=int(data['max_results'])
                 if not 0<data['put_delta_min']<=data['put_delta_max']<1 or data['put_dte_min']>data['put_dte_max']:raise ValueError()
+                if data['put_min_oi']<500 or data['put_min_volume']<100 or data['put_preferred_oi']<max(1000,data['put_min_oi']):raise ValueError()
+                if any(int(data[k])!=data[k] for k in ('put_min_oi','put_min_volume','put_preferred_oi')):raise ValueError()
                 if data['swing_min_rr']<2:raise ValueError()
                 if not 0<data['put_otm_min']<=data['put_otm_max']<1:raise ValueError()
                 if not 570<=data['morning_scan_minute']<720 or int(data['morning_scan_minute'])!=data['morning_scan_minute']:raise ValueError()

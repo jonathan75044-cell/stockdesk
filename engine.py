@@ -61,16 +61,23 @@ def put_candidate(price,option,cfg,today,zone=None,reasons=None):
         dte=(date.fromisoformat(option['expiration_date'])-today).days
         stamps=[float(option[k])/1000 for k in ('bid_date','ask_date')]
         if any(abs(datetime.now(timezone.utc).timestamp()-t)>900 for t in stamps): return reject('Stale option quote')
-    except (KeyError,TypeError,ValueError): return reject('Missing or invalid option fields')
+    except (KeyError,TypeError,ValueError,OverflowError): return reject('Missing or invalid option fields')
+    try:
+        volume=float(option['volume'])
+        raw_oi=float(option['open_interest'])
+        if isinstance(option['volume'],bool) or isinstance(option['open_interest'],bool) or not all(math.isfinite(x) and x>=0 and x.is_integer() for x in (volume,raw_oi)):
+            return reject('Invalid option volume or open interest')
+    except (KeyError,TypeError,ValueError,OverflowError):return reject('Missing or invalid option volume or open interest')
+    if volume<max(100,cfg.get('put_min_volume',100)):return reject('Daily option volume below minimum')
     if not (cfg['put_dte_min']<=dte<=cfg['put_dte_max'] and cfg['put_delta_min']<=delta<=cfg['put_delta_max']): return reject('DTE or delta outside range')
-    if not(0<bid<=ask and strike<price and strike*100<=cfg['cash_per_position'] and oi>=cfg['put_min_oi']): return reject('Bid/ask, collateral or open interest')
+    if not(0<bid<=ask and strike<price and strike*100<=cfg['cash_per_position'] and oi>=max(500,cfg['put_min_oi'])): return reject('Bid/ask, collateral or open interest')
     otm=(price-strike)/price
     if not cfg['put_otm_min']-1e-9<=otm<=cfg['put_otm_max']+1e-9: return reject('Strike not 5–10% OTM')
     if zone is not None and strike>float(zone['high']): return reject('Strike above demand zone')
     spread=(ask-bid)/((ask+bid)/2)
     if ask-bid>cfg['put_max_spread_dollars']+1e-9: return reject('Dollar spread too wide')
     if spread>cfg['put_max_spread_fraction'] or bid/strike<cfg['put_min_yield']: return reject('Relative spread or premium yield')
-    return dict(otm_pct=round(100*otm,2),spread_dollars=round(ask-bid,4),bid=bid,ask=ask,quote_timestamp=min(stamps),contract=option['symbol'],strike=strike,expiry=option['expiration_date'],dte=dte,delta=delta,premium=bid,collateral=strike*100,breakeven=round(strike-bid,2),yield_pct=round(100*bid/strike,2),max_profit=bid*100,max_loss=(strike-bid)*100,oi=oi,spread_pct=round(100*spread,2),score=round(100*bid/strike*20+(1-delta)*30-spread*20,1),risk='Assignment requires buying 100 shares. Maximum loss assumes the stock reaches zero; no stop guarantees an option exit.')
+    return dict(otm_pct=round(100*otm,2),spread_dollars=round(ask-bid,4),bid=bid,ask=ask,quote_timestamp=min(stamps),contract=option['symbol'],strike=strike,expiry=option['expiration_date'],dte=dte,delta=delta,premium=bid,collateral=strike*100,breakeven=round(strike-bid,2),yield_pct=round(100*bid/strike,2),max_profit=bid*100,max_loss=(strike-bid)*100,oi=oi,volume=int(volume),preferred_liquidity=oi>=cfg.get('put_preferred_oi',1000),spread_pct=round(100*spread,2),score=round(100*bid/strike*20+(1-delta)*30-spread*20,1),risk='Assignment requires buying 100 shares. Maximum loss assumes the stock reaches zero; no stop guarantees an option exit.')
 
 
 

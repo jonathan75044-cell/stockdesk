@@ -2,8 +2,8 @@ const assert=require('node:assert/strict');
 const {assessPreferredPut}=require('./put_setup_ui.js');
 const now=Date.parse('2026-10-16T15:00:00Z');
 const stock=['Regular market session','Underlying quote freshness','Completed daily history','Minimum stock price','Average volume','Demand confirmation','Annual fundamental gate','Put trend'];
-const optionNames=['Standard put','Quote freshness','DTE','Absolute delta','Bid/ask validity','Cash collateral','Open interest','OTM distance %','Demand-zone strike','Dollar spread','Spread %','Premium yield %','Earnings exclusion'];
-function fixture(){return [{status:'Completed',completed_at:new Date(now).toISOString(),clock:{state:'open',regular_session_end:'2026-10-16T20:00:00Z'},quote:{trade_date:now},valuation:{status:'estimated',intrinsic_value:100},demand_zone:{low:92},checks:stock.map(name=>({name,status:'pass'}))},{strike:90,volume:20,quote_timestamp:now/1000,checks:optionNames.map(name=>({name,status:'pass'}))},{contracts:1,cash:9000,allocation:9000,willing:true,profit:50,exit:'Close if support breaks; review assignment before expiry.'}]}
+const optionNames=['Standard put','Quote freshness','DTE','Absolute delta','Bid/ask validity','Cash collateral','Open interest','Daily option volume','OTM distance %','Demand-zone strike','Dollar spread','Spread %','Premium yield %','Earnings exclusion'];
+function fixture(){return [{status:'Completed',completed_at:new Date(now).toISOString(),clock:{state:'open',regular_session_end:'2026-10-16T20:00:00Z'},quote:{trade_date:now},valuation:{status:'estimated',intrinsic_value:100},demand_zone:{low:92},checks:stock.map(name=>({name,status:'pass'}))},{strike:90,volume:100,quote_timestamp:now/1000,checks:optionNames.map(name=>({name,status:'pass'}))},{contracts:1,cash:9000,allocation:9000,willing:true,profit:50,exit:'Close if support breaks; review assignment before expiry.'}]}
 let [r,o,p]=fixture();assert.equal(assessPreferredPut(r,o,p,now).passed,true);
 assert.equal(assessPreferredPut(r,o,{...p,cash:8999},now).passed,false);
 assert.equal(assessPreferredPut(r,o,{...p,contracts:2},now).collateral,18000);

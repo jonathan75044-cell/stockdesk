@@ -50,7 +50,8 @@ def option_review(price,opt,cfg,today,zone,base_passed,earnings):
         check('Absolute delta',abs(delta) if delta is not None else None,None if delta is None else cfg['put_delta_min']<=abs(delta)<=cfg['put_delta_max'],str(cfg['put_delta_min'])+'–'+str(cfg['put_delta_max'])),
         check('Bid/ask validity',{'bid':bid,'ask':ask},valid_prices,'0 < bid ≤ ask'),
         check('Cash collateral',collateral,None if collateral is None else collateral<=cfg['cash_per_position'],'≤ $'+str(cfg['cash_per_position'])+' per position'),
-        check('Open interest',oi,None if oi is None else oi>=cfg['put_min_oi'],'≥ '+str(cfg['put_min_oi'])),
+        check('Open interest',oi,None if oi is None else oi>=max(500,cfg['put_min_oi']),'≥ '+str(max(500,cfg['put_min_oi']))),
+        check('Daily option volume',number(opt.get('volume')),None if number(opt.get('volume')) is None else number(opt.get('volume'))>=max(100,cfg.get('put_min_volume',100)),'≥ '+str(max(100,cfg.get('put_min_volume',100)))+' contracts'),
         check('OTM distance %',100*otm if otm is not None else None,None if otm is None else cfg['put_otm_min']-1e-9<=otm<=cfg['put_otm_max']+1e-9,'Configured OTM range'),
         check('Demand-zone strike',strike,None if not zone or strike is None else strike<=zone['high'],'Strike at or below confirmed zone high'),
         check('Dollar spread',spread,None if spread is None else spread<=cfg['put_max_spread_dollars']+1e-9,'≤ $'+str(cfg['put_max_spread_dollars'])),
@@ -69,7 +70,7 @@ def option_review(price,opt,cfg,today,zone,base_passed,earnings):
     eligible=bool(candidate and base_passed and event_pass and all(c['status']=='pass' for c in checks))
     return {'contract':opt.get('symbol'),'expiry':opt.get('expiration_date'),'dte':dte,'strike':strike,'bid':bid,'ask':ask,
             'quote_timestamp':min(quote_times)/1000 if all(t is not None for t in quote_times) else None,
-            'delta':delta,'oi':oi,'volume':number(opt.get('volume')),'iv_pct':number(opt.get('iv_pct')),
+            'preferred_liquidity':oi is not None and oi>=cfg.get('put_preferred_oi',1000),'delta':delta,'oi':oi,'volume':number(opt.get('volume')),'iv_pct':number(opt.get('iv_pct')),
             'greeks':{k:number((opt.get('greeks') or {}).get(k)) for k in ('gamma','theta','vega','rho')},
             'checks':checks,'trade_eligible':eligible,'engine_rejections':reasons,'economics':economics,
             'note':'Expiry scenarios assume one 100-share contract sold at the quoted bid, before fees. Bid is not an execution guarantee. Annualized yield is an arithmetic comparison, not a forecast. Delta is not a guaranteed assignment probability.'}
@@ -185,7 +186,7 @@ def review_symbol(data,symbol,cfg,today,model=None):
     options=call('Option chain',chain) or []
     report['contracts_checked']=len(options)
     report['eligible_contract_count']=sum(o['trade_eligible'] for o in options)
-    options.sort(key=lambda o:(not o['trade_eligible'],-sum(c['status']=='pass' for c in o['checks']),
+    options.sort(key=lambda o:(not o['trade_eligible'],not (o['trade_eligible'] and o.get('preferred_liquidity',False)),-sum(c['status']=='pass' for c in o['checks']),
                                (o['ask']-o['bid']) if o['ask'] is not None and o['bid'] is not None else math.inf))
     report['options']=options[:60]
     swing_earnings=earnings is not None and not any(today<=d<=today+timedelta(days=14+cfg['earnings_buffer_days']) for d in earnings)

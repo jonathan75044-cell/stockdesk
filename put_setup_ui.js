@@ -6,7 +6,7 @@ function assessPreferredPut(review, option, inputs, now=Date.now()){
  const checks=[];
  const add=(name,pass,evidence)=>checks.push({name,status:pass===null?'unknown':pass?'pass':'fail',value:evidence,requirement:name});
  const requiredStock=['Regular market session','Underlying quote freshness','Completed daily history','Minimum stock price','Average volume','Demand confirmation','Annual fundamental gate','Put trend'];
- const requiredOption=['Standard put','Quote freshness','DTE','Absolute delta','Bid/ask validity','Cash collateral','Open interest','OTM distance %','Demand-zone strike','Dollar spread','Spread %','Premium yield %','Earnings exclusion'];
+ const requiredOption=['Standard put','Quote freshness','DTE','Absolute delta','Bid/ask validity','Cash collateral','Open interest','Daily option volume','OTM distance %','Demand-zone strike','Dollar spread','Spread %','Premium yield %','Earnings exclusion'];
  for(const [source,names] of [[review.checks,requiredStock],[option.checks,requiredOption]])for(const name of names){
   const c=(source||[]).find(c=>c.name===name);
   add(name,c?.status==='pass'?true:c?.status==='fail'?false:null,c?.value??'Missing evidence');
@@ -20,7 +20,7 @@ function assessPreferredPut(review, option, inputs, now=Date.now()){
  const v=review.valuation||{},strike=option.strike,lower=review.demand_zone?.low;
  add('Strike below supported intrinsic estimate',v.status==='estimated'&&positive(v.intrinsic_value)&&positive(strike)?strike<v.intrinsic_value:null,v.status==='estimated'?'Intrinsic estimate '+v.intrinsic_value:(v.reason||'Valuation unavailable'));
  add('Strike at or below support floor',positive(strike)&&positive(lower)?strike<=lower:null,positive(lower)?'Support floor '+lower:'Confirmed support unavailable');
- add('Option traded volume available and positive',finite(option.volume)?option.volume>0:null,option.volume??'Unavailable');
+ add('Daily option volume at least 100 contracts',finite(option.volume)?option.volume>=100:null,option.volume??'Unavailable');
  const n=inputs.contracts,validCount=Number.isInteger(n)&&n>=1;
  const collateral=validCount&&positive(strike)?n*100*strike:null;
  add('Whole contract count',validCount,n);
@@ -45,7 +45,7 @@ if(typeof document!=='undefined'){
   if(!o){root.textContent='Contract unavailable. Review again.';return;}
   const num=id=>{const value=document.getElementById(id).value;return value===''?null:Number(value)};
   const a=assessPreferredPut(r,o,{contracts:num('put-plan-count'),cash:num('put-plan-cash'),allocation:num('put-plan-allocation'),willing:document.getElementById('put-plan-willing').checked,profit:num('put-plan-profit'),exit:document.getElementById('put-plan-exit').value});
-  root.innerHTML='<h4>'+esc(a.status)+'</h4><p>Based on this review and your inputs. Cash and allocation are not verified broker balances. No order is placed.</p>'+criteriaTable(a.checks);
+  root.innerHTML='<h4>'+esc(a.status)+'</h4><p>'+esc(o.preferred_liquidity===true?'Preferred open interest met.':'Open interest preference not met or unavailable; 500 remains the minimum.')+'</p><p>Based on this review and your inputs. Cash and allocation are not verified broker balances. No order is placed.</p>'+criteriaTable(a.checks);
  }
  renderOptionEvidence=function(o,r){
   priorPutEvidence(o,r);
