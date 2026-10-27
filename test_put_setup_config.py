@@ -12,7 +12,7 @@ class PutSetupConfigTests(unittest.TestCase):
         self.assertEqual((cfg['put_dte_min'],cfg['put_dte_max']),(7,45))
         today=date.today()
         opt=dict(option_type='put',contract_size=100,symbol='TEST',strike=90,bid=1,ask=1.1,
-                 greeks={'delta':-.2},open_interest=800,bid_date=time.time()*1000,ask_date=time.time()*1000)
+                 greeks={'delta':-.2},open_interest=800,volume=100,bid_date=time.time()*1000,ask_date=time.time()*1000)
         for dte,expected in [(6,False),(7,True),(21,True),(45,True),(46,False)]:
             opt['expiration_date']=str(today+timedelta(days=dte))
             self.assertEqual(bool(put_candidate(100,opt,cfg,today)),expected)

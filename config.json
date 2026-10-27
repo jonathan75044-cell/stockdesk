@@ -21,5 +21,7 @@
   "min_current_ratio": 1.5,
   "max_debt_equity": 0.5,
   "demand_max_distance_atr": 3,
-  "morning_scan_minute": 585
+  "morning_scan_minute": 585,
+  "put_preferred_oi": 1000,
+  "put_min_volume": 100
 }
