@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict');
+const {trialDecisionSummary}=require('./trial_comparison_ui.js');
+const now=Date.parse('2026-10-30T15:00:00Z');
+const scan={completed_at:'2026-10-30T15:00:00Z'};
+const check=(stage,name,status)=>({stage,name,status});
+const base={quote_at:'2026-10-30T14:59:00Z',checks:[check('watch','Liquidity','pass'),check('ready','Reversal','fail'),check('confirm','Earnings','unknown')]};
+let r=trialDecisionSummary(base,scan,now);
+assert.equal(r.watch.length,0);assert.equal(r.entry.length,1);assert.equal(r.missing.length,1);assert.match(r.next,/Watch only/);
+const unknown={...base,checks:[...base.checks,check('watch','Higher low','unknown')]};
+r=trialDecisionSummary(unknown,scan,now);assert.match(r.next,/undecided/);assert.equal(r.watch.length,0);
+const failed={...unknown,checks:[...unknown.checks,check('watch','Support','fail'),check('confirm','Valuation','fail')]};
+const snapshot=JSON.stringify(failed);
+r=trialDecisionSummary(failed,scan,now);assert.match(r.next,/Watchlist blocked: Support/);assert.equal(r.review.length,1);assert.equal(r.missing.length,2);assert.equal(JSON.stringify(failed),snapshot);
+r=trialDecisionSummary(failed,{...scan,stale:true},now);assert.match(r.next,/fresh scan/);assert.match(r.data,/Stale/);
+r=trialDecisionSummary(base,{...scan,research_only:true},now);assert.match(r.data,/Closing-data/);
+for(const quote_at of ['bad','2026-10-30T14:00:00Z','2026-10-30T16:00:00Z'])assert.match(trialDecisionSummary({...base,quote_at},scan,now).data,/refreshing/);
+assert.match(trialDecisionSummary({...base,checks:[check('watch','Support','pass'),check('confirm','Sizing','unknown')]},scan,now).next,/Technical checks passed/);
+console.log('Trial decision summaries: classification, priority, missing evidence, freshness and immutability passed.');
